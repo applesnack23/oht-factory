@@ -40,7 +40,7 @@ oht_ppo_a minus rule_smart, per scenario (mean reward difference):
 
 ### Honest reading
 - oht_ppo_a is ahead of rule_smart by **+38 reward on average (standard error ±25)**. It wins 19 of 35 paired episodes. The gap is about 1.5 standard errors, so it is **not a statistically clear win**: the model is roughly as good as the smart rule, slightly better under heavy or mixed load, and slightly worse under track_block.
-- PPO without BC was not competitive (random-like in early trials), so BC warm start is essential here, as in the conveyor project.
+- PPO from scratch (no BC) was not trained or evaluated in this session; based on the conveyor project, a BC warm start is the recommended path.
 - The rule baselines are already near the fab's capacity: high_load and fleet_short saturate the fleet whatever the dispatcher does (wait for vehicle is about 200 s). Bigger AI gains would need more decision freedom, for example dispatching to vehicles that are still busy, re-dispatch, or per-vehicle speed control. These are possible next steps.
 
 ## Possible next steps
