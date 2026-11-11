@@ -386,9 +386,18 @@ export class FabRenderer {
           }
           d.scale.set(1, 1, 1);
         }
-        const attached = v.state === 'TO_DROP' || (v.state === 'LOADING' && p.hp >= 0.5) || (v.state === 'UNLOADING' && p.hp < 0.5);
-        if (attached) {
-          d.position.set(p.x, this.H - 0.6 - depth, p.z); d.updateMatrix();
+        // The FOUP being hoisted is drawn here (the server leaves it out of portFoups), using the same
+        // interpolated hoist progress as the gripper, so it never jumps between port and vehicle.
+        if (v.state === 'TO_DROP') {
+          d.position.set(p.x, this.H - 0.6, p.z); d.updateMatrix();
+          this.vFoup.setMatrixAt(nf++, d.matrix);
+        } else if (hoisting && (v.state === 'UNLOADING' || v.foupReady !== false)) {
+          const onGripper = v.state === 'LOADING' ? p.hp >= 0.5 : p.hp < 0.5;
+          // on the port: pinned to the port (the latest state's position), even while the drawn vehicle
+          // is still finishing its last interpolated metres
+          if (onGripper) d.position.set(p.x, this.H - 0.6 - depth, p.z);
+          else d.position.set(v.x, PORT_TOP + FOUP_H / 2, v.z);
+          d.updateMatrix();
           this.vFoup.setMatrixAt(nf++, d.matrix);
         }
         if (v.hot) {

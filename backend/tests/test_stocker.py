@@ -70,3 +70,24 @@ def test_state_exposes_hoist_port_foups_and_stockers():
     assert sum(s.done for s in f.stockers.values()) > 5
     L = f.get_layout()
     assert len(L["stockers"]) == 2 and len(L["stockers"][0]["cells"]) == 84
+
+
+def test_oht_waits_for_crane_and_foup_is_never_lost():
+    f = FabSimulation(None)
+    calls = []
+    for sk in f.stockers.values():
+        orig = sk.picked
+        sk.picked = (lambda o, s: (lambda jid: (calls.append(jid in s.ready), o(jid))))(orig, sk)
+    for _ in range(9000):
+        for d in f.decisions():
+            f.apply_decision(d, 0 if d.candidates else None)
+            break
+        f.step()
+        for v in f.vehicles:  # no hoisting progress at a stocker port before the crane delivered the FOUP
+            if v.state == "LOADING" and not f._foup_ready(v):
+                assert v.timer == f.hoist
+        st = f.get_state(include_events=False)
+        hoist_ports = {v["port"] for v in st["vehicles"] if v["port"]}
+        assert not hoist_ports & set(st["portFoups"])  # a hoisting OHT's port shows only its own FOUP
+    assert calls and all(calls)  # every stocker FOUP was on the port when the OHT lifted it
+    assert not any(sk.cancelled for sk in f.stockers.values())

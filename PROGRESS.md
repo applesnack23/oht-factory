@@ -1,11 +1,35 @@
 # PROGRESS — AI OHT Fab
 
 ## Status
-All phases in PLAN.md are done. Tests: `pytest backend/tests` 30 passed, `npm test` (frontend) 4 passed.
+All phases in PLAN.md are done. Tests: `pytest backend/tests` 36 passed, `npm test` (frontend) 4 passed.
 Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the cloud workspace (no JS errors, panels fill in, mode switch works). Check it on the Mac after `npm install`.
 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
+
+## v2.2 — stocker/OHT sync and FOUP continuity (current)
+- An OHT that reaches a stocker port before the crane has delivered the FOUP now **waits there** with its gripper up (metric `stockerWaitTime`), instead of lifting a FOUP that was still on the shelf. Crane retrievals now go before queued stores.
+- The FOUP being hoisted is drawn by the client with the same interpolated hoist progress as the gripper. The server leaves that port out of `portFoups`, so the FOUP no longer pops in or out at the half-way point or slides off the port. A load port shows one FOUP: further lots for the same port wait inside the tool.
+- Delivered FOUPs are taken into the tool 8 s after the drop (was 25 s).
+- Checked in real WebGL by sampling every frame: at x2 every hoisting FOUP was drawn exactly once (1641 samples, 0 missing, 0 duplicates). New test: the OHT waits for the crane, and no stocker FOUP is ever lifted before it is on the port.
+- Re-evaluated (7 scenarios × 5 seeds, below). OHTs wait for the crane 10–24 s in total per 30-minute episode, so KPIs moved only within noise.
+
+| policy | mean reward | moves/h | avg delivery s | wait for vehicle s | stocker wait s/episode |
+|---|---|---|---|---|---|
+| ppo(oht_bc2) | **2107** | 949 | 180.9 | 42.2 | 14 |
+| ppo(oht_ppo2_b) | 2096 | 948 | 182.0 | 44.3 | 24 |
+| ppo(oht_ppo2_a) | 2088 | 946 | 181.2 | 44.2 | 17 |
+| rule_preassign | 2064 | 946 | 183.4 | 44.9 | 24 |
+| rule_smart | 1137 | 891 | 233.2 | 82.8 | 9 |
+| rule_basic | 1117 | 890 | 235.4 | 86.0 | 9 |
+
+| comparison | difference in reward | wins |
+|---|---|---|
+| AI models vs rule_smart | +951 to +970 | 35/35 each |
+| oht_bc2 vs rule_preassign | +44 (SE ±30) | 20/35 |
+| oht_ppo2_b vs rule_preassign | +32 (SE ±16) | 22/35 |
+
+The three AI models are within noise of each other. oht_ppo2_b is still the recommended model because it has the most consistent edge over its teacher. No deadlocks in 245 episodes.
 
 ## v2.1 — visual detail
 - OHT hoist animation: the gripper lowers on 4 belts to the load port (now directly under the rail), grips or releases the FOUP, then rises (12 s profile: lower 40%, transfer 20%, raise 40%). FOUPs waiting on load ports are drawn.

@@ -1,9 +1,9 @@
 """Stocker interior: shelves + one stacker crane per stocker (visual model).
 
 The crane stores FOUPs that OHTs drop on a stocker port and retrieves FOUPs to the port for
-jobs that start at the stocker. It is driven by the real job events, but it never delays
-vehicles or jobs: the transport KPIs and RL results are identical with or without it.
-It uses its own random generator so it does not change the simulation's random stream.
+jobs that start at the stocker (retrievals have priority). An OHT that reaches the port before
+the crane has delivered the FOUP waits there with its gripper up (fab metric stockerWaitTime).
+It uses its own random generator so it does not change the demand random stream.
 
 Local coordinates per stocker: u = metres from the OHT lane into the stocker (0 = under the
 rail, where the I/O port shelves are), z = world z, y = height. worldX = laneX + dir * u.
@@ -58,7 +58,13 @@ class Stocker:
         self.tasks.append({"kind": "STORE", "port": port})
 
     def retrieve(self, job_id: str, port: str) -> None:
-        self.tasks.append({"kind": "RETRIEVE", "port": port, "job": job_id})
+        """Retrievals go before queued stores: an OHT may be waiting for this FOUP, a store can wait on its port."""
+        task = {"kind": "RETRIEVE", "port": port, "job": job_id}
+        for i, t in enumerate(self.tasks):
+            if t["kind"] == "STORE":
+                self.tasks.insert(i, task)
+                return
+        self.tasks.append(task)
 
     def picked(self, job_id: str) -> None:
         """The OHT has lifted the FOUP of job_id from the port."""
