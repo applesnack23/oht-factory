@@ -7,7 +7,8 @@ idle vehicles exist, REPOSITION when a vehicle becomes idle). The reward is
 everything that happened in between (event + time based).
 
 Observation (fixed size, normalized):
-  global (16) | decision type one-hot (3) | context (12) | K candidates x 10
+  global (16) | decision type one-hot (3) | context (12) | K candidates x 12
+DISPATCH candidates may be busy vehicles finishing a drop (pre-assignment): feature 10 = busy, 11 = time to free.
 Action: MultiDiscrete([K+1]) -> candidate index, or K = defer / default.
 Candidates are pre-sorted by ETA, so index 0 is always "nearest/fastest".
 """
@@ -24,7 +25,7 @@ from backend.sim.fab import DISPATCH, IDLE, REPOSITION, ROUTE, FabSimulation
 TRAIN_SEED_RANGE = (0, 1_000_000)
 EVAL_SEED_BASE = 1_000_000_000
 TYPES = (DISPATCH, ROUTE, REPOSITION)
-G, C, F = 16, 12, 10
+G, C, F = 16, 12, 12
 
 
 def eval_seeds(n: int, offset: int = 0):
@@ -196,13 +197,14 @@ class OHTEnv(gym.Env):
         for i, c in enumerate(d.candidates[: self.K]):
             if d.kind == DISPATCH:
                 feat = [1.0, c["eta"] / 120.0, c["meters"] / 300.0, c["cong"] / 10.0, c["stopped"] / 5.0,
-                        c["homePending"] / 10.0, c["homeIdle"] / 10.0, c["homeRate"] / 5.0, c["sameArea"], c["repositioning"]]
+                        c["homePending"] / 10.0, c["homeIdle"] / 10.0, c["homeRate"] / 5.0, c["sameArea"], c["repositioning"],
+                        c.get("busy", 0.0), c.get("toFree", 0.0) / 120.0]
             elif d.kind == ROUTE:
                 feat = [1.0, c["eta"] / 120.0, c["meters"] / 300.0, c["cong"] / 10.0, c["stopped"] / 5.0,
-                        c["detour"] / 150.0, c["crossover"], 0.0, 0.0, 0.0]
+                        c["detour"] / 150.0, c["crossover"], 0.0, 0.0, 0.0, 0.0, 0.0]
             else:
                 feat = [1.0, c["eta"] / 120.0, c["meters"] / 300.0, c["pending"] / 10.0, c["idle"] / 10.0,
-                        c["rate"] / 5.0, c["current"], 0.0, 0.0, 0.0]
+                        c["rate"] / 5.0, c["current"], 0.0, 0.0, 0.0, 0.0, 0.0]
             o[cb + i * F: cb + (i + 1) * F] = feat
         return np.clip(o, -1.0, 3.0)
 

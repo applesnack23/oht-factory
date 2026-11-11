@@ -47,6 +47,7 @@ class Vehicle:
     needs_reposition: bool = False
     blocked_time: float = 0.0
     moved: float = 0.0
+    next_job: Optional[str] = None  # pre-assigned job, started right after the current drop
 
 
 @dataclass
@@ -78,6 +79,10 @@ class FabSimulation:
         self.max_detour = float(self.cfg["routing"]["maxDetour"])
         self.route_lookahead = float(self.cfg["routing"]["decisionLookahead"])
         self.K = int(self.cfg["agent"]["candidates"])
+        dc = self.cfg.get("dispatch", {})
+        self.preassign = bool(dc.get("preassign", True))
+        self.preassign_horizon = float(dc.get("preassignHorizon", 90.0))
+        self.min_busy_slots = int(dc.get("minBusySlots", 3))
         self.clock = SimulationClock(self.dt)
         self.events = EventManager(400)
         self.demand = DemandGenerator(self.cfg["demand"], self.layout)
@@ -104,7 +109,7 @@ class FabSimulation:
         self.metrics = {"delivered": 0, "deliveryTimes": [], "waitTimes": [], "emptyMeters": 0.0, "loadedMeters": 0.0,
                         "busyTime": 0.0, "blockedTime": 0.0, "hotDelivered": 0, "hotOnTime": 0, "hotLate": 0,
                         "created": 0, "deadlock": False, "decisions": {DISPATCH: 0, ROUTE: 0, REPOSITION: 0},
-                        "defers": 0, "mergeWaitTime": 0.0}
+                        "defers": 0, "mergeWaitTime": 0.0, "preassigned": 0}
         self.last_progress_t = 0.0
         self.last_decision_t = -1e9
         self.recent_jobs: deque = deque()  # (t, src_area) for demand-rate features
@@ -439,11 +444,29 @@ class FabSimulation:
                 self.done_jobs = self.done_jobs[-300:]
             self.events.emit("DELIVERED", t, jobId=j.id, vehicle=veh.id, duration=round(t - j.created, 1), hot=j.hot)
             veh.state, veh.job = IDLE, None
+            nj = self.jobs.get(veh.next_job) if veh.next_job else None
+            veh.next_job = None
+            if nj is not None:
+                self._start_pickup(veh, nj, t)
+                return
+            for pj in self.jobs.values():  # a vehicle became free: deferred jobs may ask again
+                if pj.state == "PENDING" and pj.defer_until > t:
+                    pj.defer_until = t
             area = self.layout.areas[self.layout.ports[j.dst].area]
             veh.home = area.id if area.kind == "BAY" else self._nearest_bay(veh)
             self._set_idle_target(veh)
             veh.forced.clear()
             veh.needs_reposition = True
+
+    def _start_pickup(self, v: Vehicle, j: Job, t: float) -> None:
+        j.state, j.vehicle = "ASSIGNED", v.id
+        self.metrics["waitTimes"].append(t - j.created)  # wait until a vehicle actually heads to the job
+        v.state, v.job = TO_PICKUP, j.id
+        v.target = self._target_point(j.src)
+        v.stop_at_target = True
+        v.needs_reposition = False
+        v.forced.clear()
+        v.decided_nodes.clear()
 
     def _nearest_bay(self, veh: Vehicle) -> str:
         n = self.track.edges[veh.edge].v
@@ -469,6 +492,27 @@ class FabSimulation:
     # ============================================================ decisions
     def idle_vehicles(self) -> List[Vehicle]:
         return [v for v in self.vehicles if v.state == IDLE]
+
+    def preassignable(self) -> List[Vehicle]:
+        if not self.preassign:
+            return []
+        return [v for v in self.vehicles if v.state in (TO_DROP, UNLOADING) and v.next_job is None]
+
+    def _time_to_free(self, v: Vehicle) -> Tuple[float, float]:
+        """Seconds until v finishes its drop, and nothing else. Drop point (edge, s) is v.target."""
+        if v.state == UNLOADING:
+            return v.timer, 0.0
+        te, to = v.target
+        eta, _ = self._eta_to(v, te, to)
+        return eta + self.hoist, 0.0
+
+    def _eta_from_point(self, edge: int, s: float, pe: int, po: float) -> Tuple[float, float]:
+        T = self.track
+        e = T.edges[edge]
+        if edge == pe and po >= s:
+            return (po - s) / e.vmax, po - s
+        rem = e.length - s
+        return rem / e.vmax + T.time_from(e.v, pe, po), rem + T.meters_from(e.v, pe, po)
 
     def pending_jobs(self) -> List[Job]:
         js = [j for j in self.jobs.values() if j.state == "PENDING"]
@@ -498,7 +542,7 @@ class FabSimulation:
         if due:
             n_before = len(out)
             idle = self.idle_vehicles()
-            if idle:
+            if idle or self.preassignable():
                 for j in self.pending_jobs():
                     if j.defer_until <= self.time + 1e-9:
                         out.append(Decision(DISPATCH, j.id, -1, self.dispatch_candidates(j)))
@@ -585,9 +629,28 @@ class FabSimulation:
             home = st.get(v.home, {"pending": 0, "idle": 0, "rate": 0.0})
             cands.append({"vehicle": v.id, "eta": eta, "meters": meters, "cong": nveh, "stopped": nstop,
                           "homePending": home["pending"], "homeIdle": home["idle"], "homeRate": home["rate"],
-                          "sameArea": float(v.home == job.src_area), "repositioning": float(v.needs_reposition)})
+                          "sameArea": float(v.home == job.src_area), "repositioning": float(v.needs_reposition),
+                          "busy": 0.0, "toFree": 0.0})
         cands.sort(key=lambda c: c["eta"])
-        return cands[: self.K]
+        busy = []
+        for v in self.preassignable():
+            tf, _ = self._time_to_free(v)
+            if tf > self.preassign_horizon:
+                continue
+            de, do = v.target
+            eta2, meters = self._eta_from_point(de, do, pe, po)
+            route = self._edges_on_route(self.track.edges[de].v, pe, po)
+            nveh, nstop = self._congestion(route)
+            cj = self.jobs.get(v.job)
+            darea = self.layout.ports[cj.dst].area if cj else None
+            busy.append({"vehicle": v.id, "eta": tf + eta2, "meters": meters, "cong": nveh, "stopped": nstop,
+                         "homePending": 0.0, "homeIdle": 0.0, "homeRate": 0.0,
+                         "sameArea": float(darea == job.src_area), "repositioning": 0.0, "busy": 1.0, "toFree": tf})
+        busy.sort(key=lambda c: c["eta"])
+        n_busy = min(len(busy), max(self.min_busy_slots, self.K - len(cands)))
+        out = cands[: self.K - n_busy] + busy[:n_busy]
+        out.sort(key=lambda c: c["eta"])
+        return out
 
     def route_candidates(self, veh: Vehicle, node: int) -> List[dict]:
         T = self.track
@@ -643,18 +706,21 @@ class FabSimulation:
                 j.defers += 1
                 self.metrics["defers"] += 1
                 return {"ok": True, "reason": "DEFERRED"}
-            v = self.vehicles[dec.candidates[choice]["vehicle"]]
+            c = dec.candidates[choice]
+            v = self.vehicles[c["vehicle"]]
+            if c.get("busy"):
+                if v.state not in (TO_DROP, UNLOADING) or v.next_job is not None:
+                    return {"ok": False, "reason": "VEHICLE_BUSY"}
+                j.state, j.vehicle, j.assigned_t = "ASSIGNED", v.id, t
+                v.next_job = j.id
+                self.metrics["preassigned"] += 1
+                self.events.emit("PREASSIGN", t, jobId=j.id, vehicle=v.id, eta=round(c["eta"], 1))
+                return {"ok": True, "reason": "PREASSIGNED"}
             if v.state != IDLE:
                 return {"ok": False, "reason": "VEHICLE_BUSY"}
-            j.state, j.vehicle, j.assigned_t = "ASSIGNED", v.id, t
-            self.metrics["waitTimes"].append(t - j.created)
-            v.state, v.job = TO_PICKUP, j.id
-            v.target = self._target_point(j.src)
-            v.stop_at_target = True
-            v.needs_reposition = False
-            v.forced.clear()
-            v.decided_nodes.clear()
-            self.events.emit("DISPATCH", t, jobId=j.id, vehicle=v.id, eta=round(dec.candidates[choice]["eta"], 1))
+            j.assigned_t = t
+            self._start_pickup(v, j, t)
+            self.events.emit("DISPATCH", t, jobId=j.id, vehicle=v.id, eta=round(c["eta"], 1))
             return {"ok": True, "reason": "ASSIGNED"}
         veh = self.vehicles[int(dec.subject)]
         if dec.kind == ROUTE:
@@ -697,6 +763,7 @@ class FabSimulation:
             "deadlock": m["deadlock"], "decisions": dict(m["decisions"]), "defers": m["defers"],
             "mergeWaitTime": round(m["mergeWaitTime"], 1), "vehicles": V,
             "idle": sum(1 for v in self.vehicles if v.state == IDLE),
+            "preassigned": m["preassigned"],
         }
 
     def vehicle_pose(self, veh: Vehicle):

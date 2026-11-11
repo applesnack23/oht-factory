@@ -1,31 +1,139 @@
 {
   "name": "AI OHT Fab - medium",
-  "floor": { "sizeX": 130, "sizeZ": 110 },
+  "floor": {
+    "sizeX": 130,
+    "sizeZ": 110
+  },
   "railHeight": 4.5,
-  "simulation": { "dt": 0.2, "episodeLength": 1800.0, "decisionInterval": 1.0, "deferRetry": 5.0, "deadlockTime": 90.0 },
-  "interbay": { "x0": 0, "x1": 104, "z0": -15, "z1": 15, "cornerRadius": 3.0 },
+  "simulation": {
+    "dt": 0.2,
+    "episodeLength": 1800.0,
+    "decisionInterval": 1.0,
+    "deferRetry": 5.0,
+    "deadlockTime": 90.0
+  },
+  "interbay": {
+    "x0": 0,
+    "x1": 104,
+    "z0": -15,
+    "z1": 15,
+    "cornerRadius": 3.0
+  },
   "crossovers": [
-    { "id": "XD", "x": 46, "direction": "down", "label": "Shortcut top→bottom" },
-    { "id": "XU", "x": 58, "direction": "up", "label": "Shortcut bottom→top" }
+    {
+      "id": "XD",
+      "x": 46,
+      "direction": "down",
+      "label": "Shortcut top\u2192bottom"
+    },
+    {
+      "id": "XU",
+      "x": 58,
+      "direction": "up",
+      "label": "Shortcut bottom\u2192top"
+    }
   ],
   "bays": [
-    { "id": "B1", "side": "north", "center": 14, "process": "LITHO" },
-    { "id": "B2", "side": "north", "center": 34, "process": "ETCH" },
-    { "id": "B3", "side": "north", "center": 70, "process": "DEPO" },
-    { "id": "B4", "side": "north", "center": 90, "process": "CMP" },
-    { "id": "B5", "side": "south", "center": 90, "process": "DIFF" },
-    { "id": "B6", "side": "south", "center": 70, "process": "IMPLANT" },
-    { "id": "B7", "side": "south", "center": 34, "process": "METRO" },
-    { "id": "B8", "side": "south", "center": 14, "process": "CLEAN" }
+    {
+      "id": "B1",
+      "side": "north",
+      "center": 14,
+      "process": "LITHO"
+    },
+    {
+      "id": "B2",
+      "side": "north",
+      "center": 34,
+      "process": "ETCH"
+    },
+    {
+      "id": "B3",
+      "side": "north",
+      "center": 70,
+      "process": "DEPO"
+    },
+    {
+      "id": "B4",
+      "side": "north",
+      "center": 90,
+      "process": "CMP"
+    },
+    {
+      "id": "B5",
+      "side": "south",
+      "center": 90,
+      "process": "DIFF"
+    },
+    {
+      "id": "B6",
+      "side": "south",
+      "center": 70,
+      "process": "IMPLANT"
+    },
+    {
+      "id": "B7",
+      "side": "south",
+      "center": 34,
+      "process": "METRO"
+    },
+    {
+      "id": "B8",
+      "side": "south",
+      "center": 14,
+      "process": "CLEAN"
+    }
   ],
-  "bayGeometry": { "depth": 33.0, "laneHalfGap": 2.0, "entryOffset": 4.0, "radius": 2.0, "portsPerLane": 7, "portStart": 4.0, "portSpacing": 3.0 },
+  "bayGeometry": {
+    "depth": 33.0,
+    "laneHalfGap": 2.0,
+    "entryOffset": 4.0,
+    "radius": 2.0,
+    "portsPerLane": 7,
+    "portStart": 4.0,
+    "portSpacing": 3.0
+  },
   "stockers": [
-    { "id": "STK1", "side": "west", "ports": 4, "label": "Stocker West" },
-    { "id": "STK2", "side": "east", "ports": 4, "label": "Stocker East" }
+    {
+      "id": "STK1",
+      "side": "west",
+      "ports": 4,
+      "label": "Stocker West"
+    },
+    {
+      "id": "STK2",
+      "side": "east",
+      "ports": 4,
+      "label": "Stocker East"
+    }
   ],
-  "track": { "straightSpeed": 3.0, "interbaySpeed": 3.5, "curveSpeed": 1.0 },
-  "vehicles": { "count": 50, "length": 1.0, "minGap": 1.0, "accel": 1.5, "decel": 2.0, "hoistTime": 12.0, "idleSpeed": 1.0 },
-  "merge": { "requestDistance": 8.0, "stopMargin": 2.5 },
-  "routing": { "maxDetour": 150.0, "decisionLookahead": 6.0 },
-  "agent": { "candidates": 8 }
+  "track": {
+    "straightSpeed": 3.0,
+    "interbaySpeed": 3.5,
+    "curveSpeed": 1.0
+  },
+  "vehicles": {
+    "count": 50,
+    "length": 1.0,
+    "minGap": 1.0,
+    "accel": 1.5,
+    "decel": 2.0,
+    "hoistTime": 12.0,
+    "idleSpeed": 1.0
+  },
+  "merge": {
+    "requestDistance": 8.0,
+    "stopMargin": 2.5
+  },
+  "routing": {
+    "maxDetour": 150.0,
+    "decisionLookahead": 6.0
+  },
+  "agent": {
+    "candidates": 8
+  },
+  "dispatch": {
+    "preassign": true,
+    "preassignHorizon": 90.0,
+    "minBusySlots": 3
+  }
 }

@@ -21,13 +21,13 @@ from typing import Any, Callable, Deque, Dict, List, Optional
 import numpy as np
 
 from backend.ai.oht_env import OHTEnv
-from backend.policies.rules import BasicRulePolicy, SmartRulePolicy
+from backend.policies.rules import BasicRulePolicy, PreassignRulePolicy, SmartRulePolicy
 from backend.sim.config import PROJECT_ROOT, scenario_names
 
 LOGS_DIR = PROJECT_ROOT / "backend" / "logs"
 STATUS_FILE = LOGS_DIR / "training_status.json"
 SPEEDS = (1, 2, 5, 10, 20, 50)
-MODES = ("rule_basic", "rule_smart", "ppo")
+MODES = ("rule_basic", "rule_smart", "rule_preassign", "ppo")
 
 
 class FabService:
@@ -55,11 +55,13 @@ class FabService:
         self.env.fab.episode_length = 1e12  # live: run indefinitely
         self.fab = self.env.fab
         self.fab.reset(self.seed)
-        self.rules = {"rule_basic": BasicRulePolicy(self.env), "rule_smart": SmartRulePolicy(self.env)}
+        self.rules = {"rule_basic": BasicRulePolicy(self.env), "rule_smart": SmartRulePolicy(self.env),
+                      "rule_preassign": PreassignRulePolicy(self.env)}
         if self.ppo_policy is not None:
             self.ppo_policy.reset(self.env)
         self.episode_reward = 0.0
         self.decision_log: Deque[dict] = deque(maxlen=120)
+        self.defer_count = 0
 
     def _policy(self):
         if self.mode == "ppo" and self.ppo_policy is not None:
@@ -88,7 +90,11 @@ class FabService:
                 entry["eta"] = round(c["eta"], 1)
                 entry["target"] = c.get("vehicle", c.get("area", c.get("edge")))
                 entry["bestEta"] = round(d.candidates[0]["eta"], 1)
-            self.decision_log.append(entry)
+                entry["busy"] = bool(c.get("busy"))
+            if res["reason"] == "DEFERRED":
+                self.defer_count += 1  # keep the monitor readable: defers are counted, not listed
+            else:
+                self.decision_log.append(entry)
             guard += 1
 
     def sim_step(self) -> None:
@@ -199,14 +205,14 @@ class FabService:
         return {"state": self.state, "mode": self.mode, "speed": self.speed, "scenario": self.scenario, "seed": self.seed,
                 "model": self.model_name, "time": round(self.fab.time, 2), "speeds": list(SPEEDS),
                 "scenarios": scenario_names(), "modes": list(MODES),
-                "availableModes": {"rule_basic": True, "rule_smart": True, "ppo": bool(list_models())},
+                "availableModes": {"rule_basic": True, "rule_smart": True, "rule_preassign": True, "ppo": bool(list_models())},
                 "watch": self.watch_status(), "loop": self.loop_stats}
 
     def get_state(self) -> dict:
         st = self.fab.get_state()
         st["control"] = {"mode": self.mode, "state": self.state, "speed": self.speed, "model": self.model_name,
                          "episodeReward": round(self.episode_reward, 1), "watch": self.watch_status(),
-                         "decisions": list(self.decision_log)[-12:]}
+                         "decisions": list(self.decision_log)[-12:], "defers": self.defer_count}
         return st
 
     def state_message(self) -> str:

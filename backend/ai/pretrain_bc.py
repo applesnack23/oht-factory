@@ -14,12 +14,15 @@ from backend.ai.inference import MODELS_DIR, PPOPolicy
 from backend.ai.numpy_ppo import Adam, NumpyPPO, RunningMeanStd, softmax_heads
 from backend.ai.oht_env import OHTEnv, eval_seeds
 from backend.ai.rollout import evaluate_policy
-from backend.policies.rules import SmartRulePolicy
+from backend.policies.rules import PreassignRulePolicy, SmartRulePolicy
+
+TEACHERS = {"smart": SmartRulePolicy, "preassign": PreassignRulePolicy}
+TEACHER = PreassignRulePolicy
 
 
 def collect(level, n, seed0, learner=None, beta=1.0, rng=None):
     env = OHTEnv(level)
-    teacher = SmartRulePolicy(env)
+    teacher = TEACHER(env)
     X, Y, M, R, D = [], [], [], [], []
     for ep in range(n):
         o, _ = env.reset(seed=seed0 + ep)
@@ -86,13 +89,16 @@ def main(argv=None):
     p.add_argument("--ppo-lr", type=float, default=1e-4)
     p.add_argument("--eval-episodes", type=int, default=3)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--teacher", choices=list(TEACHERS), default="preassign")
     a = p.parse_args(argv)
+    global TEACHER
+    TEACHER = TEACHERS[a.teacher]
     t0 = time.time()
     log = lambda s: print(f"[{time.time() - t0:6.0f}s] {s}", flush=True)
     env = OHTEnv(a.level)
     rng = np.random.default_rng(a.seed)
     seed0 = 500_000 + a.seed * 10_000
-    log(f"collecting {a.episodes} smart-rule episodes ({a.level})")
+    log(f"collecting {a.episodes} {a.teacher}-rule episodes ({a.level})")
     X, Y, M, R, D = collect(a.level, a.episodes, seed0)
     G, rms = value_targets(R, D, 0.99)
     model = NumpyPPO(env.observation_space.shape[0], env.action_space.nvec, hidden=tuple(a.hidden),
@@ -108,13 +114,13 @@ def main(argv=None):
     ev = OHTEnv(a.level, seed_mode="eval")
     seeds = eval_seeds(a.eval_episodes)
     res = evaluate_policy(ev, PPOPolicy(model), seeds)
-    rule = evaluate_policy(ev, SmartRulePolicy(ev), seeds)
+    rule = evaluate_policy(ev, TEACHER(ev), seeds)
     out = MODELS_DIR / a.run
     out.mkdir(parents=True, exist_ok=True)
     model.save(out / "best_model"); model.save(out / "final_model")
     meta = {"run": a.run, "level": a.level, "algo": "bc_numpy", "timesteps": 0, "best_eval": res["mean_reward"],
             "samples": int(len(X)), "best_metrics": {k: v for k, v in res.items() if k != "episodes"},
-            "teacher_eval": {k: v for k, v in rule.items() if k != "episodes"}}
+            "teacher": a.teacher, "teacher_eval": {k: v for k, v in rule.items() if k != "episodes"}}
     (out / "run_meta.json").write_text(json.dumps(meta, indent=2, default=float))
     log(f"BC {a.run}: eval {res['mean_reward']:.1f} (teacher {rule['mean_reward']:.1f}) avgDel {res['avgDeliveryTime']:.1f}s "
         f"(teacher {rule['avgDeliveryTime']:.1f}s) thr/h {res['throughputPerHour']:.0f} (teacher {rule['throughputPerHour']:.0f})")

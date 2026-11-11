@@ -14,11 +14,13 @@
 
 | 결정 | 언제 | 선택지 |
 |---|---|---|
-| **DISPATCH (배차)** | 새 반송 작업이 대기 중일 때 | 후보 차량 최대 8대 중 1대, 또는 "보류" |
+| **DISPATCH (배차)** | 새 반송 작업이 대기 중일 때 | 후보 차량 최대 8대 중 1대, 또는 "보류". 후보에는 놀고 있는 차량과 **곧 짐을 내릴 차량(선배정)**이 함께 들어감 |
 | **ROUTE (경로)** | 차량이 지름길 분기점에 다가갈 때 | 최대 8개 경로 후보 중 1개 (지름길 / 링 유지) |
 | **REPOSITION (재배치)** | 차량이 할 일 없이 놀고 있을 때 | 최대 8개 대기 위치(베이/스토커) 중 1곳, 또는 그대로 |
 
-한 step이 결정 하나입니다. 관측은 111차원(전역 16 + 결정 종류 3 + 맥락 12 + 후보 8×10), 행동은 `MultiDiscrete([9])`(후보 8개 + 기본 행동)입니다. 쓸 수 없는 후보는 action mask로 막습니다.
+**선배정(pre-assignment)**: 짐을 내리러 가는 중인 차량에게 다음 작업을 미리 예약해 두면, 그 차량은 짐을 내리자마자 바로 다음 작업으로 출발합니다. 실제 OHT 제어 시스템(MCS)에서도 쓰는 방식입니다. 이 기능을 `config/fab.json`의 `dispatch.preassign`으로 켜고 끕니다.
+
+한 step이 결정 하나입니다. 관측은 127차원(전역 16 + 결정 종류 3 + 맥락 12 + 후보 8×12), 행동은 `MultiDiscrete([9])`(후보 8개 + 기본 행동)입니다. 쓸 수 없는 후보는 action mask로 막습니다.
 
 ## 실행 (Mac)
 
@@ -57,9 +59,10 @@ npm run dev                     # http://localhost:5174
   |---|---|
   | `rule_basic` | 가장 가까운 빈 차량 배차(NVF) |
   | `rule_smart` | 핫랏 우선, 정체를 고려한 경로, 수요 기반 재배치 |
+  | `rule_preassign` | smart + 곧 짐을 내릴 차량에게 선배정 (AI의 선생님 규칙) |
   | `ppo` | 아래 Model에서 고른 AI 모델 |
 
-- **Model**: `oht_bc`(모방학습), `oht_ppo_a`, `oht_ppo_b`(PPO 미세조정) 중 하나를 고르고 **Load**를 누릅니다.
+- **Model**: `oht_ppo2_b`(추천), `oht_ppo2_a`, `oht_bc2` 중 하나를 고르고 **Load**를 누릅니다.
 - 오른쪽 패널에는 KPI, 베이별 대기, 최근 AI 결정 로그(어떤 결정을 왜 했는지)가 나옵니다.
 - 3D 범례:
 
@@ -89,10 +92,10 @@ npm run dev                     # http://localhost:5174
 
 ```bash
 # 1. 모방학습(BC + DAgger): smart 규칙을 흉내 내서 시작점을 만듦 (약 5분)
-python -m backend.ai.pretrain_bc --level mix --run oht_bc
+python -m backend.ai.pretrain_bc --level mix --run oht_bc2          # 선생님: rule_preassign (--teacher smart 로 변경 가능)
 
 # 2. PPO 미세조정 (BC에서 시작)
-python -m backend.ai.train_ppo --level mix --run my_ppo --init-from oht_bc \
+python -m backend.ai.train_ppo --level mix --run my_ppo --init-from oht_bc2 \
     --hidden 128 128 --lr 1e-4 --clip-range 0.1 --ent-coef 0.001 --n-epochs 5 --timesteps 600000
 
 # 처음부터 PPO (비교용, 성능 낮음)
@@ -102,7 +105,7 @@ python -m backend.ai.train_ppo --level normal --run scratch --timesteps 300000
 python -m backend.ai.train_ppo --level normal --smoke
 
 # 3. 비교 평가 (7개 시나리오 × 5 seed, 학습에 쓰지 않은 seed)
-python -m backend.ai.evaluate --policies random rule_basic rule_smart ppo:oht_bc ppo:oht_ppo_a --seeds 5 --name compare
+python -m backend.ai.evaluate --policies random rule_basic rule_smart rule_preassign ppo:oht_bc2 ppo:oht_ppo2_b --seeds 5 --name compare
 #   → backend/logs/eval/compare/report.md, comparison.png
 
 # TensorBoard (SB3로 학습했을 때)
@@ -114,7 +117,7 @@ Mac(.venv에 SB3/torch 있음)에서는 SB3 PPO가 자동으로 쓰입니다(`--
 ## 테스트
 ```bash
 python -m pytest -q backend/tests      # 시뮬레이션 안전성, 환경, 규칙, 학습/BC, 서버/WebSocket
-cd frontend && node --test tests/
+cd frontend && npm test
 ```
 
 ## 결과

@@ -2,7 +2,7 @@
 import { api } from '../network/WebSocketClient.js';
 import { STATE_COLOR } from '../rendering/FabRenderer.js';
 
-const MODE_LABEL = { rule_basic: 'Rule: nearest vehicle', rule_smart: 'Rule: smart', ppo: 'AI (PPO)' };
+const MODE_LABEL = { rule_basic: 'Rule: nearest vehicle', rule_smart: 'Rule: smart', rule_preassign: 'Rule: smart + pre-assign', ppo: 'AI (PPO)' };
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 const f1 = (v, d = 1) => (v == null || Number.isNaN(v) ? '–' : Number(v).toFixed(d));
 
@@ -161,10 +161,10 @@ export class RightPanel {
       `<tr><td>${j.hot ? '<span class="hot">●</span> ' : ''}${j.id}</td><td class="muted">${j.srcArea} → ${j.dstArea}</td><td><span class="badge b-${j.state}">${j.state}</span></td><td class="num">${f1(j.age, 0)}</td></tr>`).join('');
     const ds = s.control?.decisions || [];
     this.$('d-log').textContent = ds.slice().reverse().map((d) => {
-      const what = d.kind === 'DISPATCH' ? `${d.subject} → OHT ${d.target ?? '—'}` : d.kind === 'ROUTE' ? `OHT ${d.subject} → edge ${d.target ?? 'default'}` : `OHT ${d.subject} → ${d.target ?? 'stay'}`;
+      const what = d.kind === 'DISPATCH' ? `${d.subject} → OHT ${d.target ?? '—'}${d.busy ? ' (after its drop)' : ''}` : d.kind === 'ROUTE' ? `OHT ${d.subject} → edge ${d.target ?? 'default'}` : `OHT ${d.subject} → ${d.target ?? 'stay'}`;
       const eta = d.eta != null ? ` eta ${d.eta}s${d.bestEta != null && d.eta > d.bestEta + 0.05 ? ` (nearest ${d.bestEta}s)` : ''}` : '';
       return `${String(d.t).padStart(7)} ${d.kind.padEnd(10)} ${what}${eta} [${d.result}]`;
-    }).join('\n');
+    }).join('\n') + (s.control?.defers ? `\n… ${s.control.defers} deferred dispatch decisions (not listed)` : '');
     this.$('e-log').textContent = (s.events || []).slice(-12).reverse().map((e) => `${e.time.toFixed(1).padStart(7)} ${e.type} ${e.jobId || e.tag || ''} ${e.vehicle != null ? 'OHT ' + e.vehicle : ''} ${e.duration ? e.duration + 's' : ''}`).join('\n');
   }
 }

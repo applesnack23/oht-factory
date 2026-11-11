@@ -14,7 +14,7 @@ import pandas as pd
 
 from backend.ai.oht_env import OHTEnv, eval_seeds
 from backend.ai.rollout import KEYS, run_episode
-from backend.policies.rules import BasicRulePolicy, RandomPolicy, SmartRulePolicy
+from backend.policies.rules import BasicRulePolicy, PreassignRulePolicy, RandomPolicy, SmartRulePolicy
 from backend.sim.config import PROJECT_ROOT, scenario_names
 
 EVAL_DIR = PROJECT_ROOT / "backend" / "logs" / "eval"
@@ -29,6 +29,8 @@ def make_policy(spec, env):
         return BasicRulePolicy(env), "rule_basic"
     if spec in ("rule_smart", "smart"):
         return SmartRulePolicy(env), "rule_smart"
+    if spec in ("rule_preassign", "preassign"):
+        return PreassignRulePolicy(env), "rule_preassign"
     if spec.startswith("ppo:"):
         from backend.ai.inference import PPOPolicy
         return PPOPolicy(spec.split(":", 1)[1]), f"ppo({Path(spec.split(':', 1)[1]).name})"

@@ -128,7 +128,10 @@ def test_dispatch_route_reposition_decisions():
                 res = f.apply_decision(d, 0)
                 assert res["ok"]
                 v = f.vehicles[d.candidates[0]["vehicle"]]
-                assert v.state == "TO_PICKUP" and v.job == d.subject
+                if d.candidates[0]["busy"]:
+                    assert res["reason"] == "PREASSIGNED" and v.next_job == d.subject
+                else:
+                    assert v.state == "TO_PICKUP" and v.job == d.subject
             elif d.kind == ROUTE:
                 assert len(d.candidates) >= 2 and d.candidates[0]["detour"] == 0.0
                 f.apply_decision(d, len(d.candidates) - 1)
@@ -183,3 +186,36 @@ def test_reset_restores_initial_state():
     run_basic(f, 200)
     f.reset(f.seed)
     assert f.state_hash() == h0 and f.time == 0 and f.summary()["delivered"] == 0
+
+
+def test_preassigned_job_starts_right_after_drop():
+    f = FabSimulation(None)
+    done = False
+    for _ in range(20000):
+        for d in f.decisions():
+            busy = [i for i, c in enumerate(d.candidates) if c.get("busy")] if d.kind == DISPATCH else []
+            if busy and not done:
+                v = f.vehicles[d.candidates[busy[0]]["vehicle"]]
+                assert f.apply_decision(d, busy[0])["reason"] == "PREASSIGNED"
+                assert f.jobs[d.subject].state == "ASSIGNED" and v.next_job == d.subject
+                jid, cur, done = d.subject, v.job, True
+            else:
+                f.apply_decision(d, 0 if d.candidates else None)
+            break
+        f.step()
+        if done and v.job != cur:
+            assert v.job == jid and v.state == "TO_PICKUP" and v.next_job is None
+            assert all(o.next_job != jid for o in f.vehicles if o is not v)
+            return
+    raise AssertionError("pre-assigned job never started")
+
+
+def test_preassign_can_be_disabled():
+    f = FabSimulation(None, {"dispatch": {"preassign": False}})
+    for _ in range(4000):
+        for d in f.decisions():
+            if d.kind == DISPATCH:
+                assert not any(c["busy"] for c in d.candidates)
+            f.apply_decision(d, 0 if d.candidates else None)
+            break
+        f.step()

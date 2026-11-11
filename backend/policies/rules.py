@@ -1,7 +1,10 @@
 """Baseline OHT controllers. They read only the env observation (same information as the AI).
 
-basic : industry default — nearest idle vehicle (NVF), shortest-time route, idle vehicles stay put
-smart : NVF with idle-surplus preference, congestion-aware routing, demand-driven repositioning
+basic    : industry default — nearest idle vehicle (NVF), shortest-time route, idle vehicles stay put
+smart    : NVF with idle-surplus preference, congestion-aware routing, demand-driven repositioning
+           (basic and smart only dispatch idle vehicles, like a classic OHT controller)
+preassign: smart + may pre-assign a job to a vehicle that is about to finish its drop when that
+           vehicle can reach the pickup sooner than any idle one
 random: uniformly random valid choice
 """
 from __future__ import annotations
@@ -22,6 +25,13 @@ def _parse(obs, K):
     return kind, cands, valid
 
 
+BUSY = 10
+
+
+def _idle_only(cands, valid):
+    return valid & (cands[:, BUSY] < 0.5)
+
+
 class BasicRulePolicy:
     name = "rule_basic"
 
@@ -33,13 +43,18 @@ class BasicRulePolicy:
 
     def act(self, obs):
         kind, cands, valid = _parse(obs, self.K)
+        if kind == DISPATCH_I:
+            valid = _idle_only(cands, valid)
         if kind == REPOSITION_I or not valid.any():
             return np.array([self.K])  # stay / defer
-        return np.array([0])  # nearest vehicle / fastest route
+        return np.array([int(np.flatnonzero(valid)[0])])  # nearest idle vehicle / fastest route
 
 
 class SmartRulePolicy:
     name = "rule_smart"
+
+    use_busy = False
+    busy_margin = 0.0
 
     def __init__(self, env=None, congestion_s=6.0, stopped_s=10.0, surplus_bonus=0.15, move_threshold=0.6):
         self.K = env.unwrapped.K if env is not None else 8
@@ -51,6 +66,8 @@ class SmartRulePolicy:
 
     def act(self, obs):
         kind, c, valid = _parse(obs, self.K)
+        if kind == DISPATCH_I and not self.use_busy:
+            valid = _idle_only(c, valid)
         if not valid.any():
             return np.array([self.K])
         idx = np.flatnonzero(valid)
@@ -58,7 +75,7 @@ class SmartRulePolicy:
             # ETA (s) minus a bonus for taking a vehicle from an area with idle surplus
             eta = c[idx, 1] * 120.0
             surplus = np.clip(c[idx, 6] * 10.0 - c[idx, 5] * 10.0, 0, 4)
-            score = eta * (1.0 - self.surplus_bonus * surplus / 4.0)
+            score = eta * (1.0 - self.surplus_bonus * surplus / 4.0) + self.busy_margin * c[idx, BUSY]
             return np.array([int(idx[np.argmin(score)])])
         if kind == ROUTE_I:
             cost = c[idx, 1] * 120.0 + self.congestion_s * c[idx, 3] * 10.0 * 0.2 + self.stopped_s * c[idx, 4] * 5.0
@@ -73,6 +90,12 @@ class SmartRulePolicy:
         if cur.size and score[best] - score[cur[0]] < self.move_threshold:
             return np.array([self.K])  # stay
         return np.array([int(idx[best])])
+
+
+class PreassignRulePolicy(SmartRulePolicy):
+    name = "rule_preassign"
+    use_busy = True
+    busy_margin = 10.0  # a busy vehicle must be >10 s faster than the best idle one
 
 
 class RandomPolicy:

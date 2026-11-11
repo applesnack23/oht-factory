@@ -60,3 +60,12 @@ def test_seed_separation():
     with pytest.raises(ValueError):
         e.reset(seed=EVAL_SEED_BASE + 1)
     assert all(s >= EVAL_SEED_BASE for s in eval_seeds(5))
+
+
+def test_preassign_rule_beats_classic_rules():
+    from backend.policies.rules import PreassignRulePolicy
+    e = OHTEnv(None, seed_mode="eval")
+    s = eval_seeds(1)[0]
+    pa = run_episode(e, PreassignRulePolicy(e), s)
+    sm = run_episode(e, SmartRulePolicy(e), s)
+    assert pa["reward"] > sm["reward"] and pa["avgDeliveryTime"] < sm["avgDeliveryTime"]

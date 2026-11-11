@@ -38,7 +38,7 @@ SHARED_STATUS = LOGS_DIR / "training_status.json"
 
 def write_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(obj, indent=2, default=float))
     os.replace(tmp, path)
 
