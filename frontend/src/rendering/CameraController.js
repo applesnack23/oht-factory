@@ -31,6 +31,7 @@ export class CameraController {
   overview(instant) { const k = this.scale; this._fly(new THREE.Vector3(this.center.x - 4 * k, 24 * k, this.center.z + 26 * k), this.center.clone(), instant); }
   top() { this._fly(new THREE.Vector3(this.center.x, 46 * this.scale, this.center.z + 0.01), this.center.clone()); }
   front() { this._fly(new THREE.Vector3(this.center.x, 6 * this.scale, this.center.z + 30 * this.scale), new THREE.Vector3(this.center.x, 1, this.center.z)); }
+  look(pos, target) { this._fly(new THREE.Vector3(...pos), new THREE.Vector3(...target)); }
   focus(point) {
     const t = point.clone();
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();

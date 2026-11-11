@@ -7,7 +7,13 @@ Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v2 — pre-assignment (current)
+## v2.1 — visual detail
+- OHT hoist animation: the gripper lowers on 4 belts to the load port (now directly under the rail), grips or releases the FOUP, then rises (12 s profile: lower 40%, transfer 20%, raise 40%). FOUPs waiting on load ports are drawn.
+- Stocker interior: glass enclosure, 2 racks × 12 bays (84 shelf cells), 4 I/O ports with conveyors, and a stacker crane (travel, lift, telescopic fork) that stores FOUPs dropped by OHTs and retrieves FOUPs for jobs that start at the stocker. backend/sim/stocker.py uses its own random generator and never delays vehicles or jobs. Episode results are bit-identical to v2 (checked: smart rule, normal, eval seed 1 = 2055.48 before and after).
+- Camera buttons: Stocker 1, Stocker 2, Hoist.
+- Checked in real WebGL (Chromium + SwiftShader, three 0.160.1 from the Mac's node_modules): no page errors; screenshots of the hoist, the stocker crane and the overview look right. Tests: backend 35 passed.
+
+## v2 — pre-assignment
 v1 analysis showed that about 49% of vehicle travel was empty and that dispatch could only use idle vehicles. v2 adds **pre-assignment**: a DISPATCH candidate may be a vehicle that is still driving to, or hoisting at, its drop port (time to free ≤ 90 s). The job is reserved for that vehicle, and the vehicle heads straight to the job when the drop finishes.
 - Observation 111 → 127 (+2 features per candidate: busy, time to free). v1 models are incompatible and were removed.
 - The classic rules (rule_basic, rule_smart) still use idle vehicles only. The new `rule_preassign` = smart + pre-assignment (a busy vehicle must be more than 10 s faster than the best idle one).

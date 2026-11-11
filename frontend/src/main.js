@@ -18,8 +18,15 @@ class App {
     const vp = document.getElementById('viewport');
     const views = document.createElement('div');
     views.className = 'views';
-    views.innerHTML = '<button data-v="overview">Overview</button><button data-v="top">Top</button><button data-v="front">Front</button>';
-    views.onclick = (e) => { const v = e.target.dataset.v; if (v) this.renderer.cameraCtl[v](); };
+    views.innerHTML = '<button data-v="overview">Overview</button><button data-v="top">Top</button><button data-v="front">Front</button>'
+      + '<button data-v="STK1">Stocker 1</button><button data-v="STK2">Stocker 2</button><button data-v="hoist">Hoist</button>';
+    views.onclick = (e) => {
+      const v = e.target.dataset.v;
+      if (!v) return;
+      if (v.startsWith('STK')) this.renderer.viewStocker(v);
+      else if (v === 'hoist') { if (!this.renderer.viewHoist()) this.toast('no vehicle is hoisting right now - try again in a second'); }
+      else this.renderer.cameraCtl[v]();
+    };
     vp.appendChild(views);
     const legend = document.createElement('div');
     legend.className = 'legend';
