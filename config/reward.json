@@ -1,0 +1,11 @@
+{
+  "delivery": 10.0,
+  "jobInSystemPerSecond": -0.02,
+  "hotInSystemPerSecond": -0.04,
+  "hotLate": -20.0,
+  "emptyTravelPerMeter": -0.005,
+  "blockedPerVehicleSecond": -0.01,
+  "invalidAction": -1.0,
+  "deadlock": -200.0,
+  "episodeEndPerUndelivered": -2.0
+}

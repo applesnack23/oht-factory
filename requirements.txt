@@ -1,0 +1,18 @@
+# Core (simulation + RL)
+numpy>=1.26
+gymnasium>=0.29
+stable-baselines3>=2.3
+torch>=2.2
+pandas>=2.1
+matplotlib>=3.8
+tensorboard>=2.15
+# Server
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.5
+httpx>=0.27          # FastAPI TestClient
+websockets>=12
+# Multi-agent
+pettingzoo>=1.24
+# Tests
+pytest>=8.0
