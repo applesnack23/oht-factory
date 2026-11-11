@@ -1,4 +1,4 @@
-// WebSocket client for /ws/factory with auto-reconnect, plus a REST helper.
+// WebSocket client for /ws/fab with auto-reconnect, plus a REST helper.
 // A ReplayClient with the same interface plays back recorded frames (demo mode).
 
 export function apiBase() {
@@ -23,8 +23,8 @@ export class WebSocketClient {
     const q = new URLSearchParams(location.search);
     const server = q.get('server');
     if (url) this.url = url;
-    else if (server) this.url = server.replace(/^http/, 'ws') + '/ws/factory';
-    else this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/factory`;
+    else if (server) this.url = server.replace(/^http/, 'ws') + '/ws/fab';
+    else this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/fab`;
     this.handlers = { layout: [], state: [], status: [], message: [] };
     this.retry = 500;
     this.connected = false;

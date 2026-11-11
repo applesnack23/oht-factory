@@ -1,6 +1,6 @@
 """Dependency-free HTTP + WebSocket server (fallback for FastAPI).
 
-Implements the same REST routes (backend/api/routes.py) and the /ws/factory
+Implements the same REST routes (backend/api/routes.py) and the /ws/fab
 WebSocket (RFC 6455, text frames) on top of asyncio streams, so the system
 can run and be integration-tested without FastAPI/uvicorn installed. Can also
 serve a static frontend directory (e.g. frontend/dist).
@@ -22,7 +22,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from backend.api.routes import ROUTES
-from backend.api.service import FactoryService
+from backend.api.service import FabService as FactoryService
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -58,7 +58,7 @@ class DevServer:
                 if n:
                     body = await reader.readexactly(n)
                 path = urlparse(target).path
-                if path == "/ws/factory" and headers.get("upgrade", "").lower() == "websocket":
+                if path == "/ws/fab" and headers.get("upgrade", "").lower() == "websocket":
                     await self.websocket(reader, writer, headers)
                     return
                 keep = await self.http(method, path, body, writer)
@@ -194,26 +194,26 @@ class DevServer:
 
 
 async def amain(host: str, port: int, level: str, static: Optional[str], autostart: bool = False):
-    service = FactoryService(None if level == "full" else level)
+    service = FactoryService(level)
     if autostart:
         service.start()
     server = DevServer(service, static)
     srv = await asyncio.start_server(server.handle, host, port)
     service.ensure_loop()
-    print(f"AI Conveyor Factory dev server on http://{host}:{port}  (ws://{host}:{port}/ws/factory)", flush=True)
+    print(f"AI OHT Fab dev server on http://{host}:{port}  (ws://{host}:{port}/ws/fab)", flush=True)
     async with srv:
         await srv.serve_forever()
 
 
-def serve(host="127.0.0.1", port=8000, level="level6", static=None, autostart=False):
+def serve(host="127.0.0.1", port=8000, level="normal", static=None, autostart=False):
     asyncio.run(amain(host, port, level, static, autostart))
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--level", default="level6")
+    p.add_argument("--port", type=int, default=8001)
+    p.add_argument("--level", default="normal", help="scenario")
     p.add_argument("--static", default=None)
     p.add_argument("--autostart", action="store_true")
     a = p.parse_args()
