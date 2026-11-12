@@ -1,23 +1,69 @@
 {
-  "jobsPerMinute": 16.0,
+  "mode": "closedLoop",
+  "processTime": {
+    "LITHO": 220,
+    "ETCH": 190,
+    "DEPO": 240,
+    "CMP": 200,
+    "DIFF": 300,
+    "IMPLANT": 160,
+    "METRO": 120,
+    "CLEAN": 140
+  },
+  "processJitter": 0.25,
+  "speed": 1.0,
+  "restTime": 1.0,
+  "dockTime": 2.0,
+  "initialOccupancy": 0.7,
+  "stockerWipPerProcess": 1,
+  "stockerShare": 0.1,
   "hotLotProbability": 0.05,
   "hotLotDeadline": 300.0,
-  "stockerShare": 0.25,
   "processFlow": {
-    "LITHO": ["ETCH", "METRO", "CLEAN"],
-    "ETCH": ["CLEAN", "METRO", "DEPO"],
-    "DEPO": ["CMP", "METRO"],
-    "CMP": ["CLEAN", "METRO"],
-    "DIFF": ["IMPLANT", "CLEAN"],
-    "IMPLANT": ["DIFF", "LITHO"],
-    "METRO": ["LITHO", "ETCH", "DEPO"],
-    "CLEAN": ["LITHO", "DIFF", "DEPO"]
+    "LITHO": [
+      "ETCH",
+      "METRO",
+      "CLEAN"
+    ],
+    "ETCH": [
+      "CLEAN",
+      "METRO",
+      "DEPO"
+    ],
+    "DEPO": [
+      "CMP",
+      "METRO"
+    ],
+    "CMP": [
+      "CLEAN",
+      "METRO"
+    ],
+    "DIFF": [
+      "IMPLANT",
+      "CLEAN"
+    ],
+    "IMPLANT": [
+      "DIFF",
+      "LITHO"
+    ],
+    "METRO": [
+      "LITHO",
+      "ETCH",
+      "DEPO"
+    ],
+    "CLEAN": [
+      "LITHO",
+      "DIFF",
+      "DEPO"
+    ]
   },
-  "bayWeights": { "LITHO": 1.6, "ETCH": 1.2, "DEPO": 1.0, "CMP": 0.8, "DIFF": 0.7, "IMPLANT": 0.7, "METRO": 1.0, "CLEAN": 1.0 },
   "phases": [
-    { "start": 0, "multiplier": 1.0, "boost": {} },
-    { "start": 600, "multiplier": 1.15, "boost": { "LITHO": 2.0, "ETCH": 1.5 } },
-    { "start": 1200, "multiplier": 0.95, "boost": { "DIFF": 2.0, "IMPLANT": 2.0 } }
+    {
+      "start": 0,
+      "multiplier": 1.0,
+      "boost": {}
+    }
   ],
-  "seed": 7
+  "seed": 7,
+  "portsPerTool": 2
 }

@@ -6,9 +6,19 @@
 |---|---|
 | 팹 크기 | 약 130 m × 110 m, 레일 높이 4.5 m |
 | 레일 | 단방향 인터베이 링 + 지름길 2개(XD, XU) + 베이 8개(인트라베이 루프) + 스토커 2개 |
-| 포트 | 120개 (베이당 14개 + 스토커 8개) |
+| 장비 | 64대 (베이당 7–8대). 장비마다 EFEM과 로드포트 1–2개, 로드포트 112개 + 스토커 포트 8개 |
 | 차량 | 50대 (fleet_short 시나리오는 36대) |
-| 수요 | 분당 16건 기본, 공정 흐름(LITHO→ETCH→DEPO→…), 핫랏(마감 300 s) |
+| 물류 흐름 | 닫힌 루프: 랏 약 85개가 공정 흐름(LITHO→ETCH→DEPO→…)을 따라 장비와 스토커를 계속 오감. 반송 요청은 공정이 끝난 FOUP에서 생김. 핫랏 5% (반송 마감 300 s) |
+
+## 팹 동작 (닫힌 루프)
+
+1. 장비의 로드포트에 FOUP가 놓이면 EFEM 쪽으로 밀려 붙고(도킹) 문이 열립니다. FOUP는 장비 안으로 들어가지 않고, 웨이퍼만 EFEM 로봇이 장비로 옮긴다고 가정합니다.
+2. 장비는 랏을 한 번에 하나씩 처리합니다(공정별 2–5분, ±25%). 다른 로드포트에 도킹된 랏은 차례를 기다립니다.
+3. 공정이 끝나면 FOUP가 도킹에서 풀리고, 다음 공정으로 가는 반송 요청이 생깁니다.
+4. 목적지는 다음 공정 장비의 **빈 로드포트**이고, 즉시 예약됩니다. 그래서 FOUP가 있는 로드포트에 또 내려놓는 일이 없습니다. 빈 로드포트가 없거나 대기해야 하면 스토커로 갑니다.
+5. 스토커에 있는 랏은 해당 공정 장비의 로드포트가 비면 그쪽으로 보내집니다.
+
+반송이 빠르면 장비가 덜 기다리므로 장비 가동률과 처리량이 올라갑니다. 배차 품질이 팹 생산성으로 이어지는 구조입니다. 랏마다 다음 공정과 처리 시간은 (seed, 랏, 단계)로 정해지므로, 어떤 정책으로 돌려도 같은 랏을 상대합니다.
 
 ## AI가 내리는 결정 3가지
 
@@ -62,7 +72,7 @@ npm run dev                     # http://localhost:5174
   | `rule_preassign` | smart + 곧 짐을 내릴 차량에게 선배정 (AI의 선생님 규칙) |
   | `ppo` | 아래 Model에서 고른 AI 모델 |
 
-- **Model**: `oht_ppo2_b`(추천), `oht_ppo2_a`, `oht_bc2` 중 하나를 고르고 **Load**를 누릅니다.
+- **Model**: `oht_ppo3_a`, `oht_ppo3_b`, `oht_bc3` 중 하나를 고르고 **Load**를 누릅니다. v3 평가에서는 `oht_bc3`가 AI 중 가장 좋았고, 선배정 규칙(`rule_preassign`)과 비슷했습니다(PROGRESS.md 참고).
 - 오른쪽 패널에는 KPI, 베이별 대기, 최근 AI 결정 로그(어떤 결정을 왜 했는지)가 나옵니다.
 - 3D 범례:
 
@@ -80,19 +90,21 @@ npm run dev                     # http://localhost:5174
   |---|---|
   | **Stocker 1 / Stocker 2** | 스토커 내부. 스태커 크레인(노란 기둥)이 포트와 선반 사이에서 FOUP를 옮김 |
   | **Hoist** | 지금 FOUP를 올리거나 내리는 OHT를 가까이에서 봄 |
-  | **Tool** | FOUP가 트레이를 따라 장비 안으로 들어가거나 밖으로 나오는 장비를 가까이에서 봄 |
+  | **Tool** | FOUP가 도킹·언도킹되는 로드포트(없으면 공정 중인 로드포트)를 가까이에서 봄 |
 
   OHT는 로드포트 위에 서면 벨트 4줄로 그리퍼를 내리고, FOUP를 집거나 놓은 뒤 다시 올립니다. 호이스트 시간은 12초입니다.
-- 장비(Tool): OHT가 로드포트에 FOUP를 내려놓으면 1초 뒤 트레이를 따라 장비 안으로 들어갑니다(3초). 장비는 랏을 하나씩 처리하고, 처리 시간은 공정별로 4–10분(±20%)입니다.
+- 장비: 뒤쪽 큰 상자가 공정 모듈(공정 색), 앞쪽 밝은 회색이 EFEM, 그 앞의 받침대가 로드포트입니다. 로드포트 판 위의 작은 램프와 진행 막대가 상태를 보여 줍니다.
 
-  | 장비 위 램프 | 의미 |
+  | 로드포트 램프 | 의미 |
   |---|---|
-  | 초록(깜빡임) | 처리 중. 장비 앞면 막대가 진행률 |
-  | 파랑 | FOUP가 들어가거나 나오는 중 |
-  | 주황 | 장비 안에 랏이 대기 중 |
-  | 회색 | 대기 |
+  | 초록(깜빡임) | 공정 중. 막대가 진행률 |
+  | 파랑 | FOUP 도킹 / 언도킹 중 |
+  | 주황 | 도킹됨, 장비 차례 대기 |
+  | 보라 | 공정 끝, OHT가 가져가길 기다림 |
+  | 흰색 | 이 로드포트로 FOUP가 오는 중(예약) |
+  | 회색 | 비어 있음 |
 
-  장비에서 출발하는 반송 요청은, 요청이 나오기 3초 전부터 FOUP가 장비에서 포트로 밀려 나와 요청 시점에는 이미 포트 위에 있습니다. 장비 처리는 시각화 모델이라 반송 결과와 AI 결과를 바꾸지 않습니다(테스트로 확인).
+  공정 모듈 위 원통 램프는 장비 전체 상태(초록 = 가동, 주황 = 대기 랏 있음, 회색 = 쉼)이고, 가동 중에는 공정 모듈이 은은하게 빛납니다.
 - 스토커는 OHT가 포트에 내려놓은 FOUP를 크레인이 빈 선반에 넣고(입고), 스토커에서 출발하는 작업이 생기면 선반의 FOUP를 포트로 꺼냅니다(출고). OHT가 크레인보다 먼저 스토커 포트에 도착하면, 크레인이 FOUP를 포트에 꺼내 놓을 때까지 그리퍼를 올린 채 기다립니다.
 - **Training** 패널에서 시나리오(`mix` 권장)와 스텝 수를 정하고 Start training을 누르면 학습이 시작됩니다. **Watch** 를 누르면 학습 중인 모델의 최신 스냅샷이 3D로 실행되고, 새 스냅샷이 나올 때마다 자동으로 다시 로드됩니다.
 
@@ -100,22 +112,22 @@ npm run dev                     # http://localhost:5174
 
 | 이름 | 내용 |
 |---|---|
-| normal | 기본 수요 16건/분, 차량 50대 |
-| high_load | 수요 +40% (22.4건/분) |
+| normal | 기본 팹 (장비 64대, WIP 약 70%, 차량 50대) |
+| high_load | 장비가 40% 빨라짐: 시간당 끝나는 랏과 반송이 늘어남 |
 | hot_lots | 핫랏 20% |
-| bay_surge | 300–1500 s 동안 LITHO/ETCH 수요 급증 |
+| bay_surge | 300–1500 s 동안 LITHO 2.5배·ETCH 2배 빨라져 이 베이에서 랏이 몰려 나옴 |
 | fleet_short | 차량 36대만 운행 |
 | track_block | 지름길 XD를 300–1200 s 동안 폐쇄 |
-| mixed | 고부하 + 핫랏 12% + XU 600–1300 s 폐쇄 |
+| mixed | 장비 25% 빨라짐 + 핫랏 12% + XU 600–1300 s 폐쇄 |
 
 ## 학습 / 평가 명령
 
 ```bash
 # 1. 모방학습(BC + DAgger): smart 규칙을 흉내 내서 시작점을 만듦 (약 5분)
-python -m backend.ai.pretrain_bc --level mix --run oht_bc2          # 선생님: rule_preassign (--teacher smart 로 변경 가능)
+python -m backend.ai.pretrain_bc --level mix --run oht_bc3          # 선생님: rule_preassign (--teacher smart 로 변경 가능)
 
 # 2. PPO 미세조정 (BC에서 시작)
-python -m backend.ai.train_ppo --level mix --run my_ppo --init-from oht_bc2 \
+python -m backend.ai.train_ppo --level mix --run my_ppo --init-from oht_bc3 \
     --hidden 128 128 --lr 1e-4 --clip-range 0.1 --ent-coef 0.001 --n-epochs 5 --timesteps 600000
 
 # 처음부터 PPO (비교용, 성능 낮음)
@@ -125,7 +137,7 @@ python -m backend.ai.train_ppo --level normal --run scratch --timesteps 300000
 python -m backend.ai.train_ppo --level normal --smoke
 
 # 3. 비교 평가 (7개 시나리오 × 5 seed, 학습에 쓰지 않은 seed)
-python -m backend.ai.evaluate --policies random rule_basic rule_smart rule_preassign ppo:oht_bc2 ppo:oht_ppo2_b --seeds 5 --name compare
+python -m backend.ai.evaluate --policies random rule_basic rule_smart rule_preassign ppo:oht_bc3 ppo:oht_ppo3_a --seeds 5 --name compare
 #   → backend/logs/eval/compare/report.md, comparison.png
 
 # TensorBoard (SB3로 학습했을 때)

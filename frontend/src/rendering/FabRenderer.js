@@ -9,7 +9,9 @@ const PROCESS_COLOR = {
   IMPLANT: 0x6bd6d6, METRO: 0xb8c4cf, CLEAN: 0xa0e0ff, STOCKER: 0x8892a0,
 };
 const PORT_TOP = 0.9, FOUP_H = 0.42;
-const TOOL_IDLE = 0x5d6670, TOOL_BUSY = 0x3ddc84, TOOL_MOVE = 0x4aa3ff, TOOL_WAIT = 0xf2a93b;
+const TOOL_IDLE = 0x5d6670, TOOL_BUSY = 0x3ddc84, TOOL_WAIT = 0xf2a93b;
+// load-port status light: E empty, V lot on its way, R/D/U docking, Q docked waiting, P processing, W ready for OHT
+const LP_COLOR = { E: 0x5d6670, V: 0xe8ecf0, R: 0x4aa3ff, D: 0x4aa3ff, U: 0x4aa3ff, Q: 0xf2a93b, P: 0x3ddc84, W: 0xb46cff };
 
 // Hoist profile over the 0..1 hoist progress: lower (0-0.4), grip/release at the port (0.4-0.6), raise (0.6-1).
 export function hoistDepth(p) {
@@ -129,42 +131,10 @@ export class FabRenderer {
       this.world.add(g);
       this.edgeMeshes.set(e.id, { group: g, mat, xo: e.tags.includes('XO') });
     }
-    // tools + stockers
-    const toolGeo = new THREE.BoxGeometry(1.8, 2.2, 2.2);
-    const lpMat = new THREE.MeshStandardMaterial({ color: 0x39424b, roughness: 0.6 });
-    const trayMat = new THREE.MeshStandardMaterial({ color: 0x59636d, roughness: 0.6 });
+    // tools: process module + EFEM with its load ports (one LP per bay port, under the OHT rail)
     this.portPos = new Map(L.ports.map((p) => [p.id, p]));
-    this.toolViews = new Map();
-    const doorMat = new THREE.MeshStandardMaterial({ color: 0x1c2126, roughness: 0.5 });
-    const barBgMat = new THREE.MeshStandardMaterial({ color: 0x20252b });
-    for (const p of L.ports) {
-      if (p.kind === 'STOCKER') continue;
-      const mat = new THREE.MeshStandardMaterial({ color: PROCESS_COLOR[p.process] || 0x999999, roughness: 0.7, emissive: 0x000000 });
-      const m = new THREE.Mesh(toolGeo, mat);
-      m.position.set(p.toolX, 1.1, p.toolZ);
-      m.castShadow = true;
-      this.world.add(m);
-      const side = Math.sign(p.x - p.toolX);  // tool face points to the load port
-      const faceX = p.toolX + side * 0.9;
-      const door = new THREE.Mesh(box, doorMat);  // opening the FOUP slides through
-      door.scale.set(0.03, 0.62, 0.62);
-      door.position.set(faceX + side * 0.016, 1.15, p.z);
-      this.world.add(door);
-      const bg = new THREE.Mesh(box, barBgMat);  // progress bar background, above the door
-      bg.scale.set(0.03, 0.16, 1.6);
-      bg.position.set(faceX + side * 0.016, 1.85, p.z);
-      this.world.add(bg);
-      this.toolViews.set(p.id, { p, mat, faceX, side, idx: this.toolViews.size });
-      const lp = new THREE.Mesh(box, lpMat);
-      lp.scale.set(0.75, 0.9, 0.75);
-      lp.position.set(p.x, 0.45, p.z);
-      lp.castShadow = true;
-      this.world.add(lp);
-      const tray = new THREE.Mesh(box, trayMat);  // load port -> tool
-      tray.scale.set(Math.abs(p.x - p.toolX), 0.08, 0.5);
-      tray.position.set((p.x + p.toolX) / 2, 0.86, p.z);
-      this.world.add(tray);
-    }
+    this.dockOffset = L.dockOffset ?? 0.14;
+    this._buildTools(L, box);
     this.areaBadges = new Map();
     for (const a of L.areas) {
       const t = label(`${a.id} · ${a.process}`, { size: 1.6 });
@@ -193,27 +163,32 @@ export class FabRenderer {
     this.vGrip = new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.12, 0.56), new THREE.MeshStandardMaterial({ color: 0x2b3138, metalness: 0.5, roughness: 0.4 }), N);
     this.vBelt = new THREE.InstancedMesh(new THREE.BoxGeometry(0.03, 1, 0.07), new THREE.MeshStandardMaterial({ color: 0x15191d }), N * 4);
     this.pFoup = new THREE.InstancedMesh(this.vFoup.geometry, this.vFoup.material, 256);
-    this.sFoup = new THREE.InstancedMesh(this.vFoup.geometry, this.vFoup.material, 256);  // FOUPs sliding port <-> tool
     // dynamic instance sets: three.js computes an InstancedMesh's bounding sphere once (here, while it is
     // empty) and would then cull it forever, so these are never frustum-culled
-    for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vBelt, this.pFoup, this.sFoup]) {
+    for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vBelt, this.pFoup]) {
       m.count = 0; m.castShadow = true; m.frustumCulled = false; this.world.add(m);
     }
-    const T = this.toolViews.size;
-    this.tLamp = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), new THREE.MeshBasicMaterial({ color: 0xffffff }), T);  // unlit: status light
-    this.tBar = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x3ddc84 }), T);
-    this.tBar.count = 0;
-    this.tBar.frustumCulled = false;
-    this.tLamp.frustumCulled = false;
-    this.world.add(this.tLamp, this.tBar);
-    const d0 = new THREE.Object3D();
-    for (const tv of this.toolViews.values()) {
-      d0.position.set(tv.p.toolX, 2.4, tv.p.toolZ); d0.updateMatrix();
-      this.tLamp.setMatrixAt(tv.idx, d0.matrix);
-      this.tLamp.setColorAt(tv.idx, new THREE.Color(TOOL_IDLE));
+    // load-port FOUPs, LP status lights, process progress bars (one per LP)
+    const nLP = this.lpViews.size;
+    this.lpFoup = new THREE.InstancedMesh(this.vFoup.geometry, this.vFoup.material, nLP);
+    this.lpLamp = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.1, 0.22), new THREE.MeshBasicMaterial({ color: 0xffffff }), nLP);
+    this.lpBar = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x3ddc84 }), nLP);
+    this.tLamp = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.12, 0.3, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }), this.toolViews.size);
+    for (const m of [this.lpFoup, this.lpLamp, this.lpBar, this.tLamp]) { m.frustumCulled = false; this.world.add(m); }
+    this.lpFoup.castShadow = true;
+    this.lpFoup.count = 0; this.lpBar.count = 0;
+    const d0 = new THREE.Object3D(), c0 = new THREE.Color();
+    for (const lv of this.lpViews.values()) {
+      d0.position.set(lv.plateX + lv.side * 0.05, 1.63, lv.p.z); d0.updateMatrix();
+      this.lpLamp.setMatrixAt(lv.idx, d0.matrix);
+      this.lpLamp.setColorAt(lv.idx, c0.setHex(LP_COLOR.E));
     }
-    this.toolActive = new Map();
-    this.toolMoves = [];
+    for (const tv of this.toolViews.values()) {
+      d0.position.set(tv.pmX, tv.pmH + 0.15, tv.zMax - 0.4); d0.updateMatrix();
+      this.tLamp.setMatrixAt(tv.idx, d0.matrix);
+      this.tLamp.setColorAt(tv.idx, c0.setHex(TOOL_IDLE));
+    }
+    this.lpState = new Map();
     this.dummy = new THREE.Object3D();
     this.cameraCtl.overview(true);
   }
@@ -225,10 +200,9 @@ export class FabRenderer {
     this.tNext = now;
     this.vehicles = s.vehicles || [];
     this.simPrev = this.simNext ?? s.time; this.simNext = s.time;
-    if (s.tools && this.toolViews) {
-      this.toolActive = new Map(s.tools.active.map((a) => [a[0], a]));
-      this.toolMoves = s.tools.moves;
-      this.toolSlide = s.tools.slide;
+    if (s.tools && this.lpViews) {
+      this.lpState = new Map(s.tools.lps.map((a) => [a[0], a]));
+      this.dockT = s.tools.dock;
     }
     const blocked = new Set(s.blocked || []);
     if (this.pFoup && s.portFoups) {
@@ -338,61 +312,106 @@ export class FabRenderer {
     return (this.simPrev ?? 0) + ((this.simNext ?? 0) - (this.simPrev ?? 0)) * t;
   }
 
+  _buildTools(L, box) {
+    // Geometry per tool (x measured from the rail toward the tool, `side` = direction tool -> rail):
+    //   0 .. 0.45  load port stage (FOUP sits here, under the OHT)
+    //   0.45       EFEM front with one load-port plate + door per LP
+    //   0.45..1.45 EFEM (wafer handling robot inside), light grey
+    //   1.45..3.35 process module, process colour
+    this.toolViews = new Map();
+    this.lpViews = new Map();
+    const efemMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e7, roughness: 0.55 });
+    const winMat = new THREE.MeshStandardMaterial({ color: 0x8fb4cc, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.75 });
+    const plateMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.5 });
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x2a3036, roughness: 0.5 });
+    const stageMat = new THREE.MeshStandardMaterial({ color: 0x4a535c, roughness: 0.5 });
+    const barBgMat = new THREE.MeshStandardMaterial({ color: 0x20252b });
+    const add = (mat, sx, sy, sz, x, y, z, shadow = true) => {
+      const m = new THREE.Mesh(box, mat);
+      m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = shadow; this.world.add(m); return m;
+    };
+    for (const t of L.tools || []) {
+      const p0 = this.portPos.get(t.ports[0]);
+      const side = Math.sign(p0.x - p0.toolX) || 1;
+      const X = (u) => p0.x - side * u;  // u = metres from the rail line toward the tool
+      const z0 = t.zMin - 1.2, z1 = t.zMax + 1.2, w = z1 - z0, zc = (z0 + z1) / 2;
+      const efemH = 2.05, pmH = 2.5;
+      add(efemMat, 1.0, efemH, w, X(0.95), efemH / 2, zc);
+      add(winMat, 0.03, 0.5, w - 0.6, X(0.45) + side * 0.016, 1.95 - 0.25, zc, false);  // EFEM window band
+      const pmMat = new THREE.MeshStandardMaterial({ color: PROCESS_COLOR[t.process] || 0x999999, roughness: 0.7, emissive: 0x000000 });
+      add(pmMat, 1.9, pmH, w, X(2.4), pmH / 2, zc);
+      const tv = { t, side, X, pmMat, pmX: X(2.4), pmH, zMax: z1, idx: this.toolViews.size, lps: t.ports };
+      this.toolViews.set(t.id, tv);
+      for (const q of t.ports) {
+        const p = this.portPos.get(q);
+        add(plateMat, 0.06, 1.15, 0.78, X(0.42), 0.95 + 1.15 / 2 - 0.4, p.z);  // load-port plate on the EFEM
+        add(doorMat, 0.03, 0.46, 0.5, X(0.42) + side * 0.035, PORT_TOP + 0.26, p.z, false);  // FOUP door opening
+        add(stageMat, 0.78, 0.07, 0.72, X(0.0), PORT_TOP - 0.035, p.z);  // stage the FOUP sits on
+        add(stageMat, 0.35, PORT_TOP - 0.07, 0.4, X(0.2), (PORT_TOP - 0.07) / 2, p.z);  // stage support
+        add(barBgMat, 0.02, 0.1, 0.62, X(0.42) + side * 0.035, 1.5, p.z, false);  // progress bar slot on the plate
+        this.lpViews.set(q, { p, side, tool: t.id, plateX: X(0.42), barX: X(0.42) + side * 0.05, X, idx: this.lpViews.size });
+      }
+    }
+  }
+
   _animateTools(now) {
     const sim = this._simNow(now);
     const d = this.dummy, col = new THREE.Color();
     const pulse = 0.55 + 0.45 * Math.sin(now * 4);
-    let nb = 0;
+    const ease = (f) => { f = Math.min(1, Math.max(0, f)); return f * f * (3 - 2 * f); };
+    const busyTools = new Set();
+    let nf = 0, nb = 0;
+    d.rotation.set(0, 0, 0);
+    for (const lv of this.lpViews.values()) {
+      const a = this.lpState.get(lv.p.id);
+      const st = a ? a[1] : 'E';
+      // FOUP on the stage: slides against the EFEM to dock (door opens), back when undocking
+      if (a && st !== 'V') {
+        const f = a[3] > a[2] ? (sim - a[2]) / (a[3] - a[2]) : 1;
+        const dock = st === 'D' ? ease(f) : st === 'U' ? 1 - ease(f) : (st === 'Q' || st === 'P') ? 1 : 0;
+        d.scale.set(1, 1, 1);
+        d.position.set(lv.X(this.dockOffset * dock), PORT_TOP + FOUP_H / 2, lv.p.z); d.updateMatrix();
+        this.lpFoup.setMatrixAt(nf++, d.matrix);
+      }
+      if (st === 'P') {
+        busyTools.add(lv.tool);
+        const f = Math.min(1, Math.max(0, (sim - a[2]) / Math.max(1e-6, a[3] - a[2])));
+        const len = 0.58 * f;
+        d.position.set(lv.barX, 1.5, lv.p.z - 0.29 + len / 2);
+        d.scale.set(0.02, 0.07, Math.max(0.001, len)); d.updateMatrix();
+        this.lpBar.setMatrixAt(nb++, d.matrix);
+      }
+      const c = LP_COLOR[st] ?? LP_COLOR.E;
+      if (lv._c !== c || st === 'P') {
+        lv._c = c;
+        this.lpLamp.setColorAt(lv.idx, col.setHex(c).multiplyScalar(st === 'P' ? pulse + 0.3 : 1));
+        this.lpLamp.instanceColor.needsUpdate = true;
+      }
+    }
+    this.lpFoup.count = nf; this.lpFoup.instanceMatrix.needsUpdate = true;
+    this.lpBar.count = nb; this.lpBar.instanceMatrix.needsUpdate = true;
     for (const tv of this.toolViews.values()) {
-      const a = this.toolActive.get(tv.p.id);
-      const busy = a && a[2] > sim && a[1] <= sim;
-      const moving = this.toolMoves.some((m) => m[0] === tv.p.id && sim >= m[1] && sim < m[1] + this.toolSlide);
-      const c = busy ? TOOL_BUSY : moving ? TOOL_MOVE : a && a[3] > 0 ? TOOL_WAIT : TOOL_IDLE;
+      const busy = busyTools.has(tv.t.id);
+      const queued = !busy && tv.lps.some((q) => (this.lpState.get(q) || [])[1] === 'Q');
+      const c = busy ? TOOL_BUSY : queued ? TOOL_WAIT : TOOL_IDLE;
       if (tv._c !== c || busy) {
         tv._c = c;
         this.tLamp.setColorAt(tv.idx, col.setHex(c).multiplyScalar(busy ? pulse + 0.3 : 1));
         this.tLamp.instanceColor.needsUpdate = true;
       }
-      tv.mat.emissive.setHex(busy ? PROCESS_COLOR[tv.p.process] || 0x333333 : 0x000000);
-      tv.mat.emissiveIntensity = busy ? 0.18 + 0.12 * pulse : 0;
-      if (busy) {
-        const f = Math.min(1, (sim - a[1]) / (a[2] - a[1]));
-        const len = 1.56 * f;
-        d.position.set(tv.faceX + tv.side * 0.035, 1.85, tv.p.z - 0.78 + len / 2);
-        d.rotation.set(0, 0, 0); d.scale.set(0.03, 0.12, Math.max(0.001, len)); d.updateMatrix();
-        this.tBar.setMatrixAt(nb++, d.matrix);
-      }
+      tv.pmMat.emissive.setHex(busy ? PROCESS_COLOR[tv.t.process] || 0x333333 : 0x000000);
+      tv.pmMat.emissiveIntensity = busy ? 0.15 + 0.1 * pulse : 0;
     }
-    this.tBar.count = nb;
-    this.tBar.instanceMatrix.needsUpdate = true;
-    // FOUPs sliding along the tray: dir 1 = port -> tool (delivered lot), -1 = tool -> port (lot ready to ship)
-    let ns = 0;
-    d.scale.set(1, 1, 1); d.rotation.set(0, 0, 0);
-    for (const [pid, start, dir] of this.toolMoves) {
-      const tv = this.toolViews.get(pid);
-      if (!tv || ns >= 256) continue;
-      let f = Math.min(1, Math.max(0, (sim - start) / this.toolSlide));
-      if (dir < 0) f = 1 - f;
-      const ease = f * f * (3 - 2 * f);
-      const inside = tv.faceX - tv.side * 0.45;  // just inside the tool body: hidden by it
-      const x = tv.p.x + (inside - tv.p.x) * ease;
-      d.position.set(x, PORT_TOP + FOUP_H / 2, tv.p.z); d.updateMatrix();
-      this.sFoup.setMatrixAt(ns++, d.matrix);
-    }
-    this.sFoup.count = ns;
-    this.sFoup.instanceMatrix.needsUpdate = true;
   }
 
   viewTool() {
-    // a tool that is taking a FOUP in or pushing one out right now
-    const sim = this._simNow(performance.now() / 1000);
-    // prefer a FOUP that is about to start sliding, so the camera arrives in time to see it
-    const moves = (this.toolMoves || []).filter((q) => sim < q[1] + this.toolSlide).sort((a, b) => b[1] - a[1]);
-    const m = moves[0];
-    const tv = m ? this.toolViews.get(m[0]) : [...this.toolViews.values()].find((t) => this.toolActive.get(t.p.id));
-    if (!tv) return false;
-    const { p, side } = tv;
-    this.cameraCtl.look([p.x + side * 2.2, 2.9, p.z + 3.6], [(p.x + p.toolX) / 2, 1.1, p.z]);
+    // a load port where a FOUP is docking/undocking right now, else one that is processing
+    const pick = (sts) => [...this.lpState.values()].filter((a) => sts.includes(a[1])).sort((a, b) => b[2] - a[2])[0];
+    const a = pick(['R', 'D']) || pick(['U']) || pick(['P']);
+    const lv = a && this.lpViews.get(a[0]);
+    if (!lv) return false;
+    const { p, side } = lv;
+    this.cameraCtl.look([p.x + side * 3.2, 2.8, p.z + 3.6], [p.x - side * 0.8, 1.1, p.z]);
     return true;
   }
 
@@ -520,7 +539,7 @@ export class FabRenderer {
       }
     }
     if (this.stockerViews && this.skNext) this._animateStockers(now);
-    if (this.toolViews && this.tLamp) this._animateTools(now);
+    if (this.lpViews && this.lpFoup) this._animateTools(now);
     this.cameraCtl.update(1 / 60);
     this.renderer.render(this.scene, this.camera);
     this._frames++;

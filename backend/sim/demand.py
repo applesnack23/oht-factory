@@ -1,4 +1,6 @@
-"""Transport demand: FOUP move requests from tools/stockers (exogenous, policy-independent)."""
+"""Transport job record (requests are created by the closed-loop lot flow in lotflow.py).
+
+DemandGenerator below is the earlier open-loop model (random requests); it is kept for reference only."""
 from __future__ import annotations
 
 import math
@@ -26,6 +28,7 @@ class Job:
     defer_until: float = 0.0
     late: bool = False
     defers: int = 0
+    lot: Optional[object] = None  # the lot being moved (closed-loop flow)
 
     def to_dict(self, now: float) -> dict:
         return {"id": self.id, "src": self.src, "dst": self.dst, "srcArea": self.src_area, "dstArea": self.dst_area,

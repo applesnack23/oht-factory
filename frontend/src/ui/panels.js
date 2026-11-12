@@ -171,13 +171,13 @@ export class RightPanel {
 
 const KPIS = [
   ['throughputPerHour', 'Moves / h', (m) => f1(m.throughputPerHour, 0)],
-  ['delivered', 'Delivered', (m) => m.delivered],
   ['avgDeliveryTime', 'Avg delivery s', (m) => f1(m.avgDeliveryTime)],
   ['p95DeliveryTime', 'P95 delivery s', (m) => f1(m.p95DeliveryTime)],
   ['avgWaitForVehicle', 'Wait for OHT s', (m) => f1(m.avgWaitForVehicle)],
   ['pending', 'Waiting jobs', (m) => m.pending],
   ['emptyTravelRatio', 'Empty travel', (m) => (m.emptyTravelRatio == null ? '–' : `${(m.emptyTravelRatio * 100).toFixed(0)}%`)],
-  ['utilization', 'Utilization', (m) => (m.utilization == null ? '–' : `${(m.utilization * 100).toFixed(0)}%`)],
+  ['utilization', 'OHT util', (m) => (m.utilization == null ? '–' : `${(m.utilization * 100).toFixed(0)}%`)],
+  ['toolUtilization', 'Tool util', (m) => (m.toolUtilization == null ? '–' : `${(m.toolUtilization * 100).toFixed(0)}%`)],
 ];
 
 export class KpiBar {

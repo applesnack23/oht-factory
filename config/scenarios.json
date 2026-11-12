@@ -1,11 +1,74 @@
 {
   "scenarios": {
-    "normal":       { "description": "Nominal demand (16 jobs/min), 50 vehicles" },
-    "high_load":    { "description": "Demand +40% (22.4 jobs/min)", "demand": { "jobsPerMinute": 22.4 } },
-    "hot_lots":     { "description": "20% hot lots with 300 s deadline", "demand": { "hotLotProbability": 0.2 } },
-    "bay_surge":    { "description": "Strong LITHO/ETCH surge 300-1500 s", "demand": { "phases": [ { "start": 0, "multiplier": 1.0, "boost": {} }, { "start": 300, "multiplier": 1.2, "boost": { "LITHO": 3.0, "ETCH": 2.5 } }, { "start": 1500, "multiplier": 1.0, "boost": {} } ] } },
-    "fleet_short":  { "description": "Only 36 vehicles available", "vehicles": { "count": 36 } },
-    "track_block":  { "description": "Shortcut XD closed for maintenance 300-1200 s", "blocks": [ { "edgeTag": "XD", "start": 300, "end": 1200 } ] },
-    "mixed":        { "description": "High load + hot lots + XU closed 600-1300 s", "demand": { "jobsPerMinute": 20.0, "hotLotProbability": 0.12 }, "blocks": [ { "edgeTag": "XU", "start": 600, "end": 1300 } ] }
+    "normal": {
+      "description": "Nominal fab: 64 tools (2 load ports each), ~70% WIP, 50 vehicles"
+    },
+    "high_load": {
+      "description": "Tools 40% faster: more lots finish per hour, more transport",
+      "demand": {
+        "speed": 1.4
+      }
+    },
+    "hot_lots": {
+      "description": "20% hot lots with a 300 s transport deadline",
+      "demand": {
+        "hotLotProbability": 0.2
+      }
+    },
+    "bay_surge": {
+      "description": "LITHO/ETCH tools 2.5x/2x faster 300-1500 s (burst of lots from those bays)",
+      "demand": {
+        "phases": [
+          {
+            "start": 0,
+            "multiplier": 1.0,
+            "boost": {}
+          },
+          {
+            "start": 300,
+            "multiplier": 1.0,
+            "boost": {
+              "LITHO": 2.5,
+              "ETCH": 2.0
+            }
+          },
+          {
+            "start": 1500,
+            "multiplier": 1.0,
+            "boost": {}
+          }
+        ]
+      }
+    },
+    "fleet_short": {
+      "description": "Only 36 vehicles available",
+      "vehicles": {
+        "count": 36
+      }
+    },
+    "track_block": {
+      "description": "Shortcut XD closed for maintenance 300-1200 s",
+      "blocks": [
+        {
+          "edgeTag": "XD",
+          "start": 300,
+          "end": 1200
+        }
+      ]
+    },
+    "mixed": {
+      "description": "Tools 25% faster + 12% hot lots + XU closed 600-1300 s",
+      "demand": {
+        "speed": 1.25,
+        "hotLotProbability": 0.12
+      },
+      "blocks": [
+        {
+          "edgeTag": "XU",
+          "start": 600,
+          "end": 1300
+        }
+      ]
+    }
   }
 }

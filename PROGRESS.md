@@ -1,13 +1,50 @@
 # PROGRESS — AI OHT Fab
 
 ## Status
-All phases in PLAN.md are done. Tests: `pytest backend/tests` 38 passed, `npm test` (frontend) 4 passed.
+All phases in PLAN.md are done. Tests: `pytest backend/tests` 40 passed, `npm test` (frontend) 4 passed.
 Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the cloud workspace (no JS errors, panels fill in, mode switch works). Check it on the Mac after `npm install`.
 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v2.3 — process tools (current)
+## v3 — closed-loop fab with EFEM tools (current)
+The transport requests are no longer random. **Lots circulate through the fab**:
+- 64 tools, each an EFEM with 1–2 load ports (112 LPs), one FOUP per load port.
+- A delivered FOUP docks against the EFEM (door opens). The tool processes one lot at a time (2–5 min by process, ±25%), while a lot on the other LP waits docked. When processing ends, the FOUP undocks and a transport request to the lot's next process step is issued.
+- The destination is a **free LP of a tool for that process, reserved at once**, so OHTs never deliver to an occupied LP. Otherwise the lot goes to a stocker, and stocker lots are sent out when an LP of their next process frees up.
+- WIP is constant, about 86 lots (≈70% of LPs plus stocker lots). Per-lot randomness (next process, process time, stocker diversion) is keyed by (seed, lot, step), so every policy faces the same lots.
+- Scenarios now scale tool speed instead of request rate: high_load = tools 40% faster, bay_surge = LITHO/ETCH faster for 300–1500 s, mixed = tools 25% faster + hot lots + XU closed.
+- New KPIs: tool utilization and lots processed. Faster transport means tools wait less, which raises fab output.
+- The v2.x open-loop request generator (and the visual-only tool model) was replaced. backend/sim/lotflow.py; tests in test_lotflow.py (one FOUP per LP, reserved destination, constant WIP, one lot per chamber, policy-independent lots).
+- Retrained: oht_bc3 (BC + DAgger from rule_preassign, imitation accuracy 96%), oht_ppo3_a / oht_ppo3_b (PPO fine-tune from oht_bc3, 600k steps each).
+
+### Evaluation (7 scenarios × 5 held-out seeds)
+Full tables: [docs/eval_report.md](docs/eval_report.md)
+
+| policy | mean reward | moves/h | avg delivery s | wait for vehicle s | tool util | lots processed / 30 min |
+|---|---|---|---|---|---|---|
+| rule_preassign | **2855** | 958 | 144.6 | 7.0 | 56.7% | 383.4 |
+| ppo(oht_bc3) | 2830 | 955 | 145.3 | 7.0 | 56.5% | 382.5 |
+| ppo(oht_ppo2_b) (v2 model) | 2826 | 954 | 145.4 | 7.8 | 56.4% | 383.3 |
+| ppo(oht_ppo3_a) | 2821 | 953 | 145.6 | 7.2 | 56.4% | 382.3 |
+| ppo(oht_ppo3_b) | 2821 | 954 | 146.0 | 6.9 | 56.4% | 382.0 |
+| rule_basic | 2362 | 896 | 163.3 | 12.9 | 52.9% | 357.4 |
+| rule_smart | 2296 | 886 | 166.9 | 11.8 | 52.4% | 354.8 |
+| random | 968 | 713 | 234.2 | 35.8 | 42.2% | 290.7 |
+
+| comparison | difference in reward | wins |
+|---|---|---|
+| AI models vs rule_smart | +525 to +535 | 33–35 / 35 |
+| oht_bc3 vs rule_preassign | −24 (SE ±26) | 18/35 |
+| oht_ppo3_a vs rule_preassign | −33 (SE ±16) | 12/35 |
+
+### Honest reading
+- Pre-assignment (in the rule or in the AI) clearly beats the classic controllers in the closed-loop fab: about +7% moves/h, −13% delivery time and **+8% lots processed** (383 vs 355 per 30 min), because tools wait less for transport.
+- **The AI does not beat its teacher (rule_preassign) in v3.** BC matches it within noise. PPO fine-tuning did not improve on BC; it is slightly worse (≈2 SE), mainly in high_load. The small v2 edge did not carry over to the closed-loop fab.
+- In practice rule_preassign and oht_bc3 are equivalent. To make the AI clearly better, likely next steps: a reward on tool idle time / lots processed (what the closed loop actually optimises), longer PPO with more environments, or giving the AI decisions the rule does not make (choosing which free LP / stocker a lot goes to).
+- No deadlocks in 280 evaluation episodes.
+
+## v2.3 — process tools (superseded by v3)
 - Every bay load port has a tool that takes delivered FOUPs in and processes them. A FOUP rests 1 s on the port, slides along the tray into the tool (3 s), waits in the tool buffer, and is processed one lot at a time (4–10 min by process, ±20%). Tools start with WIP, like a running fab.
 - Tool status light: green, pulsing = processing (progress bar on the tool face); blue = FOUP sliding in or out; amber = lots waiting inside; gray = idle. The tool body also glows while processing. New camera button: Tool.
 - Requests that start at a tool: the simulator draws requests 3 s ahead from the same random stream, so the tool pushes the FOUP out before the request appears. **Transport and RL results are bit-identical to v2.2**, checked episode by episode against the v2.2 evaluation and by a test that the job stream is unchanged. The v2.2 evaluation below therefore still applies.

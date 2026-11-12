@@ -23,10 +23,10 @@ import numpy as np
 
 from .config import resolve_config
 from .core import EventManager, SeededRandom, SimulationClock
-from .demand import DemandGenerator, Job
+from .demand import Job
+from .lotflow import LotFlow
 from .layout import FabLayout
 from .stocker import build_stockers
-from .tools import SLIDE as TOOL_SLIDE, ToolSet
 
 IDLE, TO_PICKUP, LOADING, TO_DROP, UNLOADING = "IDLE", "TO_PICKUP", "LOADING", "TO_DROP", "UNLOADING"
 DISPATCH, ROUTE, REPOSITION = "DISPATCH", "ROUTE", "REPOSITION"
@@ -87,7 +87,7 @@ class FabSimulation:
         self.min_busy_slots = int(dc.get("minBusySlots", 3))
         self.clock = SimulationClock(self.dt)
         self.events = EventManager(400)
-        self.demand = DemandGenerator(self.cfg["demand"], self.layout)
+        self.flow = LotFlow(self.cfg["demand"], self.layout)  # closed-loop lots, tools with EFEM load ports
         self.block_edges: Dict[str, List[int]] = {}
         for tag, edges in self.layout.crossover_edges.items():
             self.block_edges[tag] = edges
@@ -100,7 +100,6 @@ class FabSimulation:
         self.rng = SeededRandom(self.seed)
         self.clock.reset()
         self.events.reset()
-        self.demand.reset(self.rng.orders)
         for e in self.track.edges:
             e.blocked = False
         self.track.build_routing()
@@ -117,9 +116,8 @@ class FabSimulation:
         self.recent_jobs: deque = deque()  # (t, src_area) for demand-rate features
         self._spawn_vehicles(int(self.cfg["vehicles"]["count"]))
         self.stockers = build_stockers(self.layout, self.seed)  # visual crane model, own RNG
-        self.tools = ToolSet(self.layout, self.seed)  # process tools at bay ports, own RNG
-        self.upcoming: List = []  # requests drawn ahead, not yet released
         self.events.emit("RESET", 0.0, seed=self.seed, scenario=self.cfg.get("scenario"))
+        self._register(self.flow.reset(self.seed), 0.0)  # fab starts loaded: lots in tools and stockers
 
     def _spawn_vehicles(self, n: int) -> None:
         """Distribute vehicles evenly over the bays' intrabay loops (idle, circulating)."""
@@ -207,24 +205,9 @@ class FabSimulation:
         res = {"delivered": [], "hotLate": 0, "emptyMeters": 0.0, "blockedVehicles": 0, "inSystem": 0, "hotInSystem": 0,
                "deadlock": False}
         self._update_blocks(t)
-        # Requests are drawn SLIDE s ahead from the same random stream (identical jobs and times), so a
-        # tool can push the FOUP out onto its port before the request reaches the dispatcher.
-        for j in self.demand.generate(t + TOOL_SLIDE):
-            self.upcoming.append(j)
-            if j.src_area not in self.stockers:
-                self.tools.job_created(j.id, j.src, j.created - TOOL_SLIDE)
-        released = [j for j in self.upcoming if j.created <= t + 1e-9]
-        self.upcoming = [j for j in self.upcoming if j.created > t + 1e-9]
-        for j in released:
-            self.jobs[j.id] = j
-            self.metrics["created"] += 1
-            self.recent_jobs.append((t, j.src_area))
-            self.events.emit("JOB", t, jobId=j.id, src=j.src, dst=j.dst, hot=j.hot)
-            if j.src_area in self.stockers:
-                self.stockers[j.src_area].retrieve(j.id, j.src)
+        self._register(self.flow.update(t, dt), t)  # transport requests from lots that finished
         for sk in self.stockers.values():
             sk.update(dt)
-        self.tools.update(t)
         while self.recent_jobs and self.recent_jobs[0][0] < t - 600:
             self.recent_jobs.popleft()
         T = self.track
@@ -443,15 +426,20 @@ class FabSimulation:
             veh.timer = self.hoist
         veh.stop_at_target = False
 
+    def _register(self, jobs: List[Job], t: float) -> None:
+        for j in jobs:
+            self.jobs[j.id] = j
+            self.metrics["created"] += 1
+            self.recent_jobs.append((t, j.src_area))
+            self.events.emit("JOB", t, jobId=j.id, src=j.src, dst=j.dst, hot=j.hot)
+            if j.src_area in self.stockers:
+                self.stockers[j.src_area].retrieve(j.id, j.src)
+
     def _foup_ready(self, veh: Vehicle) -> bool:
-        """The FOUP must be on the port: brought by the stocker crane, or pushed out by the tool."""
+        """A stocker FOUP must first be brought to the port by the crane (a tool's FOUP is already there)."""
         j = self.jobs.get(veh.job)
-        if j is None:
-            return True
-        sk = self.stockers.get(j.src_area)
-        if sk is not None:
-            return j.id in sk.ready
-        return self.tools.ready(j.id, self.time)
+        sk = self.stockers.get(j.src_area) if j else None
+        return sk is None or j.id in sk.ready
 
     def _finish_hoist(self, veh: Vehicle, t: float) -> None:
         j = self.jobs.get(veh.job)
@@ -459,7 +447,8 @@ class FabSimulation:
             veh.state, j.state, j.picked_t = TO_DROP, "DELIVERING", t
             if j.src_area in self.stockers:
                 self.stockers[j.src_area].picked(j.id)
-            self.tools.picked(j.id)
+            self.flow.picked(j, t)  # the load port is free again
+            self._register(self.flow.drain(), t)  # a waiting stocker lot may now be sent to it
             veh.target = self._target_point(j.dst)
             veh.stop_at_target = True
             veh.forced.clear()
@@ -468,8 +457,8 @@ class FabSimulation:
             j.state, j.done_t = "DONE", t
             if j.dst_area in self.stockers:
                 self.stockers[j.dst_area].store(j.dst)
-            else:
-                self.tools.delivered(j.dst, t)  # rests on the port, then slides into the tool
+            self.flow.delivered(j, t)  # docks at the tool's EFEM, or queues in the stocker
+            self._register(self.flow.drain(), t)
             m = self.metrics
             m["delivered"] += 1
             m["deliveryTimes"].append(t - j.created)
@@ -807,6 +796,10 @@ class FabSimulation:
             "idle": sum(1 for v in self.vehicles if v.state == IDLE),
             "preassigned": m["preassigned"],
             "portWaitTime": round(m["portWaitTime"], 1),
+            "toolUtilization": round(self.flow.utilization(self.time), 4),
+            "lotsProcessed": self.flow.processed,
+            "stockerLots": self.flow.stock_count(),
+            "toolsStarved": sum(1 for lp in self.flow.lps.values() if lp.state in ("E", "V")),
         }
 
     def vehicle_pose(self, veh: Vehicle):
@@ -817,6 +810,8 @@ class FabSimulation:
     def get_layout(self) -> dict:
         d = self.layout.to_dict()
         d["stockers"] = [sk.to_dict() for sk in self.stockers.values()]
+        d["tools"] = self.flow.tool_layout()
+        d["dockOffset"] = 0.14
         d.update({"name": self.cfg.get("name"), "floor": self.cfg["floor"], "railHeight": self.cfg["railHeight"],
                   "bays": self.cfg["bays"], "vehicleLength": self.vlen, "dt": self.dt, "candidates": self.K})
         return d
@@ -839,7 +834,7 @@ class FabSimulation:
             "vehicles": vs, "jobs": [j.to_dict(self.time) for j in pend[:40]], "areas": self.area_stats(),
             "blocked": [e.id for e in self.track.edges if e.blocked], "metrics": self.summary(),
             "portFoups": self.port_foups(), "stockers": [sk.state() for sk in self.stockers.values()],
-            "tools": self.tools.state(),
+            "tools": {"lps": self.flow.view(self._hoisting_ports()), "dock": self.flow.dock_t},
         }
         if include_events:
             st["events"] = self.events.recent(25, exclude={"JOB"})
@@ -849,23 +844,22 @@ class FabSimulation:
         """Load ports holding a FOUP (3D view). The FOUP a vehicle is hoisting is drawn with the vehicle (`port`)."""
         t = self.time
         out = set()
-        for j in self.jobs.values():
-            if j.state in ("PENDING", "ASSIGNED"):
-                if j.src_area in self.stockers:
-                    if j.id not in self.stockers[j.src_area].ready:
-                        continue  # still on the shelf
-                elif not self.tools.ready(j.id, t):
-                    continue  # still sliding out of the tool (drawn by the client)
+        for j in self.jobs.values():  # tool load ports are drawn from tools.lps; here only stocker ports
+            if j.state in ("PENDING", "ASSIGNED") and j.src_area in self.stockers and j.id in self.stockers[j.src_area].ready:
                 out.add(j.src)
         for sk in self.stockers.values():
             out.update(p for p in sk.ports if sk.port_has_foup(p))
         # a port where an OHT is hoisting shows only that OHT's FOUP (drawn by the client); a load port
         # holds one FOUP, further lots for the same port wait inside the tool / stocker
+        return sorted(out - self._hoisting_ports())
+
+    def _hoisting_ports(self) -> set:
+        out = set()
         for v in self.vehicles:
             if v.state in (LOADING, UNLOADING):
                 j = self.jobs[v.job]
-                out.discard(j.src if v.state == LOADING else j.dst)
-        return sorted(out)
+                out.add(j.src if v.state == LOADING else j.dst)
+        return out
 
     def state_hash(self) -> str:
         parts = [f"{self.time:.3f}"] + [f"{v.id}:{v.edge}:{v.s:.5f}:{v.state}:{v.job}" for v in self.vehicles]
