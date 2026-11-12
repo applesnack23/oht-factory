@@ -1,6 +1,13 @@
 // OrbitControls camera with presets (overview / top / front) and fly-to-equipment.
+//
+// Wheel / trackpad:
+//   two-finger swipe (trackpad)  -> move the view over the floor (pan), like a map
+//   pinch (trackpad, ctrlKey)    -> zoom
+//   mouse wheel (line steps)     -> zoom;  Shift + wheel -> pan
+//   left drag rotate, right drag pan (OrbitControls)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { wheelAction } from './wheel.js';
 
 export class CameraController {
   constructor(camera, dom, center = new THREE.Vector3(3, 0, 0), scale = 1) {
@@ -14,7 +21,10 @@ export class CameraController {
     this.controls.minDistance = 2;
     this.controls.maxDistance = 90 * scale;
     this.controls.screenSpacePanning = true;
+    this.controls.enableZoom = false;  // wheel handled below: swipe = pan, pinch = zoom
     this.anim = null;
+    this._wheel = (e) => this.onWheel(e);
+    dom.addEventListener('wheel', this._wheel, { passive: false });
     this.overview(true);
   }
 
@@ -36,6 +46,38 @@ export class CameraController {
     const t = point.clone();
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     this._fly(t.clone().add(dir.multiplyScalar(9)).setY(Math.max(4, t.y + 5)), t);
+  }
+
+  onWheel(e) {
+    e.preventDefault();
+    this.anim = null;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    if (wheelAction(e) === 'zoom') this.zoom(Math.exp(dy * (e.ctrlKey ? 0.01 : 0.0015)));
+    else if (e.shiftKey && dx === 0) this.pan(dy, 0);  // Shift + mouse wheel: sideways
+    else this.pan(dx, dy);
+  }
+
+  zoom(factor) {
+    const c = this.controls;
+    const off = this.camera.position.clone().sub(c.target);
+    const len = THREE.MathUtils.clamp(off.length() * factor, c.minDistance, c.maxDistance);
+    this.camera.position.copy(c.target).add(off.setLength(len));
+  }
+
+  pan(dx, dy) {
+    // move camera and target together over the floor plane; speed scales with the viewing distance
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    const k = dist * 0.0016;
+    const fwd = new THREE.Vector3();
+    this.camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1).applyQuaternion(this.camera.quaternion).setY(0);  // looking straight down
+    fwd.normalize();
+    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+    const move = right.multiplyScalar(dx * k).add(fwd.multiplyScalar(-dy * k));
+    this.camera.position.add(move);
+    this.controls.target.add(move);
   }
 
   update(dt) {

@@ -64,6 +64,7 @@ class Tool:
     area: str
     ports: List[str]
     active: Optional[str] = None  # LP being processed
+    mode: str = "auto"  # auto | manual | alarm (tower lamp red; no new lot is started). Never set by the flow itself.
     busy_time: float = 0.0
 
 
@@ -131,7 +132,7 @@ class LotFlow:
         for lp in self.lps.values():
             lp.state, lp.lot, lp.job, lp.busy_time = EMPTY, None, None, 0.0
         for tool in self.tools.values():
-            tool.active, tool.busy_time = None, 0.0
+            tool.active, tool.busy_time, tool.mode = None, 0.0, "auto"
             for i, q in enumerate(tool.ports):  # already loaded: one lot in process, others docked in queue
                 if rng.random() >= occ:
                     continue
@@ -234,7 +235,7 @@ class LotFlow:
                     else:  # UNDOCK finished: the lot asks for transport
                         j = self._route(lp.lot, lp.port, lp.area, t)
                         lp.state, lp.job, lp.t0 = WAIT, j.id, t
-            if tool.active is None:  # chamber free: start the docked lot that has waited longest (hot first)
+            if tool.active is None and tool.mode == "auto":  # chamber free: start the docked lot that has waited longest (hot first)
                 queued = [self.lps[q] for q in tool.ports if self.lps[q].state == QUEUE]
                 if queued:
                     lp = min(queued, key=lambda x: (not x.lot.hot, x.t0))
@@ -248,6 +249,16 @@ class LotFlow:
         return out
 
     # ------------------------------------------------------------ view / KPI
+    def set_mode(self, tool_id: str, mode: str) -> dict:
+        """Operator / equipment state: 'manual' or 'alarm' stops the tool from starting new lots."""
+        if tool_id not in self.tools or mode not in ("auto", "manual", "alarm"):
+            raise ValueError(f"unknown tool or mode: {tool_id} {mode}")
+        self.tools[tool_id].mode = mode
+        return {"tool": tool_id, "mode": mode}
+
+    def modes(self) -> Dict[str, str]:
+        return {t.id: t.mode for t in self.tools.values() if t.mode != "auto"}
+
     def view(self, skip: set) -> List[list]:
         """[port, state, t0, t1, hot] for load ports holding a FOUP (except ports in skip)."""
         return [[lp.port, lp.state, round(lp.t0, 2), round(lp.t1, 2), int(lp.lot.hot) if lp.lot else 0]

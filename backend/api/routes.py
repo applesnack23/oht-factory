@@ -23,6 +23,7 @@ ROUTES = {
     ("POST", "/api/fab/start"): _start,
     ("POST", "/api/fab/pause"): lambda s, b: s.pause(),
     ("POST", "/api/fab/stop"): lambda s, b: s.stop(),
+    ("POST", "/api/fab/tool-mode"): lambda s, b: s.fab.flow.set_mode(_b(b)["tool"], _b(b).get("mode", "auto")),
     ("POST", "/api/fab/speed"): lambda s, b: s.set_speed(int(_b(b).get("speed", 5))),
     ("GET", "/api/models"): lambda s, b: {"models": s.list_models(), "loaded": s.model_name},
     ("POST", "/api/models/load"): lambda s, b: s.load_model(_b(b)["name"]),

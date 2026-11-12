@@ -33,7 +33,8 @@ class App {
     legend.className = 'legend';
     legend.innerHTML = Object.entries(STATE_COLOR).filter(([k]) => k !== 'UNLOADING').map(([k, c]) => `<span><i style="background:${hex(c)}"></i>${k === 'LOADING' ? 'HOIST' : k}</span>`).join('')
       + '<span><i style="background:#f0f2f4"></i>FOUP</span><span><i style="background:#ff3b47;border-radius:50%"></i>hot lot</span>'
-      + '<span><i style="background:#3ddc84"></i>processing</span><span><i style="background:#4aa3ff"></i>FOUP docking/undocking</span><span><i style="background:#f2a93b"></i>docked, waiting for chamber</span><span><i style="background:#b46cff"></i>done, waiting for OHT</span><span><i style="background:#e8ecf0"></i>lot on its way</span>'
+      + '<span><b style="margin-right:4px">tower:</b><i style="background:#2f7bff"></i>processing</span><span><i style="background:#29d65a"></i>done, call OHT</span><span><i style="background:#ff9a1f"></i>not processing</span><span><i style="background:#ff2a2a"></i>alarm (blink) / manual</span>'
+      + '<span><b style="margin-right:4px">load port:</b><i style="background:#3fd0e0"></i>docking</span><span><i style="background:#ff9a1f"></i>docked, waiting</span><span><i style="background:#e8ecf0"></i>lot on its way</span>'
       + '<span><i style="background:#8c6fd1"></i>shortcut (red = closed)</span><span><i style="background:#d94bd9"></i>route decision point</span>';
     vp.appendChild(legend);
     this.chips = document.getElementById('overlay');

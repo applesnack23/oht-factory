@@ -18,6 +18,8 @@ from backend.api.service import FabService
 
 def test_train_smoke_save_load_and_inference():
     from backend.ai import train_ppo
+    status = train_ppo.LOGS_DIR / "training_status.json"
+    saved = status.read_bytes() if status.exists() else None  # don't leave the test run in the UI
     meta = train_ppo.main(["--level", "normal", "--smoke", "--run", "pytest_oht", "--algo", "numpy"])
     assert meta["timesteps"] >= 1024
     m = load_model(MODELS_DIR / "pytest_oht" / "best_model.npz")
@@ -27,6 +29,10 @@ def test_train_smoke_save_load_and_inference():
     assert (MODELS_DIR / "pytest_oht" / "latest_model.json").exists()
     for d in (train_ppo.MODELS_DIR, train_ppo.CKPT_DIR, train_ppo.LOGS_DIR):
         shutil.rmtree(d / "pytest_oht", ignore_errors=True)
+    if saved is None:
+        status.unlink(missing_ok=True)
+    else:
+        status.write_bytes(saved)
 
 
 def test_behavior_cloning_smoke():

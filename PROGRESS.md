@@ -7,7 +7,13 @@ Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v3 — closed-loop fab with EFEM tools (current)
+## v3.1 — tower lamps, trackpad camera (current)
+- Tower lamp on every tool (red / orange / green / blue, top to bottom). Blue = processing, green = processing finished and transport requested, orange = not processing, red = alarm (blinking) / manual (steady). Several segments can be lit together. Red is wired through `POST /api/fab/tool-mode` (a tool in alarm or manual starts no new lot) but never raised by the simulation. Load-port lamps were recoloured to match: blue processing, green waiting for OHT.
+- Camera: a two-finger trackpad swipe now pans the view over the floor; pinch (ctrlKey wheel) zooms; a mouse wheel still zooms (Shift + wheel pans). Wheel and tower logic are in `rendering/wheel.js` and `rendering/towerLamp.js`, with unit tests (`npm test`: 6 passed).
+- Checked in real WebGL: tower states for alarm / manual / processing / finished, swipe moves camera and target together (distance unchanged), pinch zooms.
+- The training-smoke test no longer leaves `pytest_oht` in the UI's training panel.
+
+## v3 — closed-loop fab with EFEM tools
 The transport requests are no longer random. **Lots circulate through the fab**:
 - 64 tools, each an EFEM with 1–2 load ports (112 LPs), one FOUP per load port.
 - A delivered FOUP docks against the EFEM (door opens). The tool processes one lot at a time (2–5 min by process, ±25%), while a lot on the other LP waits docked. When processing ends, the FOUP undocks and a transport request to the lot's next process step is issued.

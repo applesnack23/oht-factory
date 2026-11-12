@@ -834,7 +834,7 @@ class FabSimulation:
             "vehicles": vs, "jobs": [j.to_dict(self.time) for j in pend[:40]], "areas": self.area_stats(),
             "blocked": [e.id for e in self.track.edges if e.blocked], "metrics": self.summary(),
             "portFoups": self.port_foups(), "stockers": [sk.state() for sk in self.stockers.values()],
-            "tools": {"lps": self.flow.view(self._hoisting_ports()), "dock": self.flow.dock_t},
+            "tools": {"lps": self.flow.view(self._hoisting_ports()), "dock": self.flow.dock_t, "modes": self.flow.modes()},
         }
         if include_events:
             st["events"] = self.events.recent(25, exclude={"JOB"})

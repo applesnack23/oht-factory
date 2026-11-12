@@ -1,6 +1,7 @@
 // 3D OHT fab: ceiling rails, hangers, tools, stockers, vehicles (instanced) with FOUPs.
 // All logistics run on the Python server; the browser only interpolates vehicle poses.
 import * as THREE from 'three';
+import { TOWER, TOWER_OFF, towerSegments } from './towerLamp.js';
 import { CameraController } from './CameraController.js';
 import { pointAt, samplePath, lerpAngle } from './pathUtils.js';
 
@@ -9,9 +10,8 @@ const PROCESS_COLOR = {
   IMPLANT: 0x6bd6d6, METRO: 0xb8c4cf, CLEAN: 0xa0e0ff, STOCKER: 0x8892a0,
 };
 const PORT_TOP = 0.9, FOUP_H = 0.42;
-const TOOL_IDLE = 0x5d6670, TOOL_BUSY = 0x3ddc84, TOOL_WAIT = 0xf2a93b;
 // load-port status light: E empty, V lot on its way, R/D/U docking, Q docked waiting, P processing, W ready for OHT
-const LP_COLOR = { E: 0x5d6670, V: 0xe8ecf0, R: 0x4aa3ff, D: 0x4aa3ff, U: 0x4aa3ff, Q: 0xf2a93b, P: 0x3ddc84, W: 0xb46cff };
+const LP_COLOR = { E: 0x5d6670, V: 0xe8ecf0, R: 0x3fd0e0, D: 0x3fd0e0, U: 0x3fd0e0, Q: 0xff9a1f, P: 0x2f7bff, W: 0x29d65a };
 
 // Hoist profile over the 0..1 hoist progress: lower (0-0.4), grip/release at the port (0.4-0.6), raise (0.6-1).
 export function hoistDepth(p) {
@@ -24,6 +24,7 @@ export function hoistDepth(p) {
 }
 
 export const STATE_COLOR = { IDLE: 0x9aa5b1, TO_PICKUP: 0x33b1ff, LOADING: 0xf5a524, TO_DROP: 0x3ecf8e, UNLOADING: 0xf5a524 };
+
 
 function label(text, { bg = 'rgba(20,28,36,.85)', color = '#e6edf3', size = 1.0 } = {}) {
   const c = document.createElement('canvas');
@@ -172,8 +173,8 @@ export class FabRenderer {
     const nLP = this.lpViews.size;
     this.lpFoup = new THREE.InstancedMesh(this.vFoup.geometry, this.vFoup.material, nLP);
     this.lpLamp = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1, 0.1, 0.22), new THREE.MeshBasicMaterial({ color: 0xffffff }), nLP);
-    this.lpBar = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x3ddc84 }), nLP);
-    this.tLamp = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.12, 0.12, 0.3, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }), this.toolViews.size);
+    this.lpBar = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x2f7bff }), nLP);
+    this.tLamp = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.085, 0.085, 0.15, 14), new THREE.MeshBasicMaterial({ color: 0xffffff }), this.toolViews.size * 4);
     for (const m of [this.lpFoup, this.lpLamp, this.lpBar, this.tLamp]) { m.frustumCulled = false; this.world.add(m); }
     this.lpFoup.castShadow = true;
     this.lpFoup.count = 0; this.lpBar.count = 0;
@@ -184,9 +185,11 @@ export class FabRenderer {
       this.lpLamp.setColorAt(lv.idx, c0.setHex(LP_COLOR.E));
     }
     for (const tv of this.toolViews.values()) {
-      d0.position.set(tv.pmX, tv.pmH + 0.15, tv.zMax - 0.4); d0.updateMatrix();
-      this.tLamp.setMatrixAt(tv.idx, d0.matrix);
-      this.tLamp.setColorAt(tv.idx, c0.setHex(TOOL_IDLE));
+      for (let k = 0; k < 4; k++) {  // stacked segments on top of the tower pole
+        d0.position.set(tv.towerX, tv.towerY + 0.155 * (3 - k) + 0.075, tv.towerZ); d0.updateMatrix();
+        this.tLamp.setMatrixAt(tv.idx * 4 + k, d0.matrix);
+        this.tLamp.setColorAt(tv.idx * 4 + k, c0.setHex(TOWER_OFF).lerp(new THREE.Color(TOWER[k]), 0.14));
+      }
     }
     this.lpState = new Map();
     this.dummy = new THREE.Object3D();
@@ -202,6 +205,7 @@ export class FabRenderer {
     this.simPrev = this.simNext ?? s.time; this.simNext = s.time;
     if (s.tools && this.lpViews) {
       this.lpState = new Map(s.tools.lps.map((a) => [a[0], a]));
+      this.toolModes = s.tools.modes || {};
       this.dockT = s.tools.dock;
     }
     const blocked = new Set(s.blocked || []);
@@ -326,6 +330,8 @@ export class FabRenderer {
     const doorMat = new THREE.MeshStandardMaterial({ color: 0x2a3036, roughness: 0.5 });
     const stageMat = new THREE.MeshStandardMaterial({ color: 0x4a535c, roughness: 0.5 });
     const barBgMat = new THREE.MeshStandardMaterial({ color: 0x20252b });
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x8a939c, metalness: 0.5, roughness: 0.4 });
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x2b3036, roughness: 0.5 });
     const add = (mat, sx, sy, sz, x, y, z, shadow = true) => {
       const m = new THREE.Mesh(box, mat);
       m.scale.set(sx, sy, sz); m.position.set(x, y, z); m.castShadow = shadow; this.world.add(m); return m;
@@ -340,7 +346,14 @@ export class FabRenderer {
       add(winMat, 0.03, 0.5, w - 0.6, X(0.45) + side * 0.016, 1.95 - 0.25, zc, false);  // EFEM window band
       const pmMat = new THREE.MeshStandardMaterial({ color: PROCESS_COLOR[t.process] || 0x999999, roughness: 0.7, emissive: 0x000000 });
       add(pmMat, 1.9, pmH, w, X(2.4), pmH / 2, zc);
-      const tv = { t, side, X, pmMat, pmX: X(2.4), pmH, zMax: z1, idx: this.toolViews.size, lps: t.ports };
+      // tower lamp: on the EFEM roof, at the operator end of the tool
+      const towerX = X(0.75), towerZ = z1 - 0.3, poleH = 0.32;
+      add(poleMat, 0.05, poleH, 0.05, towerX, efemH + poleH / 2, towerZ, false);
+      add(poleMat, 0.2, 0.04, 0.2, towerX, efemH + 0.02, towerZ, false);
+      const cap = add(capMat, 0.19, 0.05, 0.19, towerX, efemH + poleH + 4 * 0.155 + 0.025, towerZ, false);
+      cap.rotation.y = Math.PI / 4;
+      const tv = { t, side, X, pmMat, pmX: X(2.4), pmH, zMax: z1, idx: this.toolViews.size, lps: t.ports,
+                   towerX, towerZ, towerY: efemH + poleH, seg: [-1, -1, -1, -1] };
       this.toolViews.set(t.id, tv);
       for (const q of t.ports) {
         const p = this.portPos.get(q);
@@ -390,14 +403,19 @@ export class FabRenderer {
     }
     this.lpFoup.count = nf; this.lpFoup.instanceMatrix.needsUpdate = true;
     this.lpBar.count = nb; this.lpBar.instanceMatrix.needsUpdate = true;
+    const blinkOn = Math.floor(now * 2.5) % 2 === 0;
+    const c1 = new THREE.Color();
+    const modes = this.toolModes || {};
     for (const tv of this.toolViews.values()) {
       const busy = busyTools.has(tv.t.id);
-      const queued = !busy && tv.lps.some((q) => (this.lpState.get(q) || [])[1] === 'Q');
-      const c = busy ? TOOL_BUSY : queued ? TOOL_WAIT : TOOL_IDLE;
-      if (tv._c !== c || busy) {
-        tv._c = c;
-        this.tLamp.setColorAt(tv.idx, col.setHex(c).multiplyScalar(busy ? pulse + 0.3 : 1));
-        this.tLamp.instanceColor.needsUpdate = true;
+      const seg = towerSegments(tv.lps.map((q) => (this.lpState.get(q) || [])[1] || 'E'), modes[tv.t.id]);
+      for (let k = 0; k < 4; k++) {
+        const on = seg[k] === 1 || (seg[k] === 2 && blinkOn);
+        if (tv.seg[k] !== on) {
+          tv.seg[k] = on;
+          this.tLamp.setColorAt(tv.idx * 4 + k, on ? col.setHex(TOWER[k]) : col.setHex(TOWER_OFF).lerp(c1.setHex(TOWER[k]), 0.14));
+          this.tLamp.instanceColor.needsUpdate = true;
+        }
       }
       tv.pmMat.emissive.setHex(busy ? PROCESS_COLOR[tv.t.process] || 0x333333 : 0x000000);
       tv.pmMat.emissiveIntensity = busy ? 0.15 + 0.1 * pulse : 0;
