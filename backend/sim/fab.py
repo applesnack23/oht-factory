@@ -26,6 +26,7 @@ from .core import EventManager, SeededRandom, SimulationClock
 from .demand import DemandGenerator, Job
 from .layout import FabLayout
 from .stocker import build_stockers
+from .tools import SLIDE as TOOL_SLIDE, ToolSet
 
 IDLE, TO_PICKUP, LOADING, TO_DROP, UNLOADING = "IDLE", "TO_PICKUP", "LOADING", "TO_DROP", "UNLOADING"
 DISPATCH, ROUTE, REPOSITION = "DISPATCH", "ROUTE", "REPOSITION"
@@ -110,13 +111,14 @@ class FabSimulation:
         self.metrics = {"delivered": 0, "deliveryTimes": [], "waitTimes": [], "emptyMeters": 0.0, "loadedMeters": 0.0,
                         "busyTime": 0.0, "blockedTime": 0.0, "hotDelivered": 0, "hotOnTime": 0, "hotLate": 0,
                         "created": 0, "deadlock": False, "decisions": {DISPATCH: 0, ROUTE: 0, REPOSITION: 0},
-                        "defers": 0, "mergeWaitTime": 0.0, "preassigned": 0, "stockerWaitTime": 0.0}
+                        "defers": 0, "mergeWaitTime": 0.0, "preassigned": 0, "portWaitTime": 0.0}
         self.last_progress_t = 0.0
         self.last_decision_t = -1e9
         self.recent_jobs: deque = deque()  # (t, src_area) for demand-rate features
         self._spawn_vehicles(int(self.cfg["vehicles"]["count"]))
         self.stockers = build_stockers(self.layout, self.seed)  # visual crane model, own RNG
-        self.port_hold: Dict[str, float] = {}  # bay port -> time until a delivered FOUP is taken in by the tool
+        self.tools = ToolSet(self.layout, self.seed)  # process tools at bay ports, own RNG
+        self.upcoming: List = []  # requests drawn ahead, not yet released
         self.events.emit("RESET", 0.0, seed=self.seed, scenario=self.cfg.get("scenario"))
 
     def _spawn_vehicles(self, n: int) -> None:
@@ -205,7 +207,15 @@ class FabSimulation:
         res = {"delivered": [], "hotLate": 0, "emptyMeters": 0.0, "blockedVehicles": 0, "inSystem": 0, "hotInSystem": 0,
                "deadlock": False}
         self._update_blocks(t)
-        for j in self.demand.generate(t):
+        # Requests are drawn SLIDE s ahead from the same random stream (identical jobs and times), so a
+        # tool can push the FOUP out onto its port before the request reaches the dispatcher.
+        for j in self.demand.generate(t + TOOL_SLIDE):
+            self.upcoming.append(j)
+            if j.src_area not in self.stockers:
+                self.tools.job_created(j.id, j.src, j.created - TOOL_SLIDE)
+        released = [j for j in self.upcoming if j.created <= t + 1e-9]
+        self.upcoming = [j for j in self.upcoming if j.created > t + 1e-9]
+        for j in released:
             self.jobs[j.id] = j
             self.metrics["created"] += 1
             self.recent_jobs.append((t, j.src_area))
@@ -214,6 +224,7 @@ class FabSimulation:
                 self.stockers[j.src_area].retrieve(j.id, j.src)
         for sk in self.stockers.values():
             sk.update(dt)
+        self.tools.update(t)
         while self.recent_jobs and self.recent_jobs[0][0] < t - 600:
             self.recent_jobs.popleft()
         T = self.track
@@ -235,7 +246,7 @@ class FabSimulation:
                 if veh.state != LOADING or self._foup_ready(veh):
                     veh.timer -= dt
                 else:
-                    self.metrics["stockerWaitTime"] += dt  # OHT waits at the port for the stocker crane
+                    self.metrics["portWaitTime"] += dt  # OHT waits at the port for the stocker crane or tool
                 new_pos.append(None)
                 continue
             path = paths[veh.id]
@@ -433,10 +444,14 @@ class FabSimulation:
         veh.stop_at_target = False
 
     def _foup_ready(self, veh: Vehicle) -> bool:
-        """A FOUP leaving a stocker must first be brought to the port by the crane."""
+        """The FOUP must be on the port: brought by the stocker crane, or pushed out by the tool."""
         j = self.jobs.get(veh.job)
-        sk = self.stockers.get(j.src_area) if j else None
-        return sk is None or j.id in sk.ready
+        if j is None:
+            return True
+        sk = self.stockers.get(j.src_area)
+        if sk is not None:
+            return j.id in sk.ready
+        return self.tools.ready(j.id, self.time)
 
     def _finish_hoist(self, veh: Vehicle, t: float) -> None:
         j = self.jobs.get(veh.job)
@@ -444,6 +459,7 @@ class FabSimulation:
             veh.state, j.state, j.picked_t = TO_DROP, "DELIVERING", t
             if j.src_area in self.stockers:
                 self.stockers[j.src_area].picked(j.id)
+            self.tools.picked(j.id)
             veh.target = self._target_point(j.dst)
             veh.stop_at_target = True
             veh.forced.clear()
@@ -453,7 +469,7 @@ class FabSimulation:
             if j.dst_area in self.stockers:
                 self.stockers[j.dst_area].store(j.dst)
             else:
-                self.port_hold[j.dst] = t + 8.0  # the tool takes the FOUP in shortly after the drop
+                self.tools.delivered(j.dst, t)  # rests on the port, then slides into the tool
             m = self.metrics
             m["delivered"] += 1
             m["deliveryTimes"].append(t - j.created)
@@ -567,7 +583,11 @@ class FabSimulation:
             if idle or self.preassignable():
                 for j in self.pending_jobs():
                     if j.defer_until <= self.time + 1e-9:
-                        out.append(Decision(DISPATCH, j.id, -1, self.dispatch_candidates(j)))
+                        cands = self.dispatch_candidates(j)
+                        if not cands:  # nothing can take it (busy vehicles beyond the horizon): defer
+                            j.defer_until = self.time + self.defer_retry
+                            continue
+                        out.append(Decision(DISPATCH, j.id, -1, cands))
                         break  # one dispatch at a time (state changes after each)
             for veh in self.vehicles:
                 if veh.needs_reposition and veh.state == IDLE:
@@ -786,7 +806,7 @@ class FabSimulation:
             "mergeWaitTime": round(m["mergeWaitTime"], 1), "vehicles": V,
             "idle": sum(1 for v in self.vehicles if v.state == IDLE),
             "preassigned": m["preassigned"],
-            "stockerWaitTime": round(m["stockerWaitTime"], 1),
+            "portWaitTime": round(m["portWaitTime"], 1),
         }
 
     def vehicle_pose(self, veh: Vehicle):
@@ -819,6 +839,7 @@ class FabSimulation:
             "vehicles": vs, "jobs": [j.to_dict(self.time) for j in pend[:40]], "areas": self.area_stats(),
             "blocked": [e.id for e in self.track.edges if e.blocked], "metrics": self.summary(),
             "portFoups": self.port_foups(), "stockers": [sk.state() for sk in self.stockers.values()],
+            "tools": self.tools.state(),
         }
         if include_events:
             st["events"] = self.events.recent(25, exclude={"JOB"})
@@ -830,12 +851,12 @@ class FabSimulation:
         out = set()
         for j in self.jobs.values():
             if j.state in ("PENDING", "ASSIGNED"):
-                if j.src_area in self.stockers and j.id not in self.stockers[j.src_area].ready:
-                    continue  # still on the shelf
+                if j.src_area in self.stockers:
+                    if j.id not in self.stockers[j.src_area].ready:
+                        continue  # still on the shelf
+                elif not self.tools.ready(j.id, t):
+                    continue  # still sliding out of the tool (drawn by the client)
                 out.add(j.src)
-        for p in [p for p, until in self.port_hold.items() if until < t]:
-            del self.port_hold[p]
-        out.update(self.port_hold)
         for sk in self.stockers.values():
             out.update(p for p in sk.ports if sk.port_has_foup(p))
         # a port where an OHT is hoisting shows only that OHT's FOUP (drawn by the client); a load port

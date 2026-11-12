@@ -1,13 +1,21 @@
 # PROGRESS — AI OHT Fab
 
 ## Status
-All phases in PLAN.md are done. Tests: `pytest backend/tests` 36 passed, `npm test` (frontend) 4 passed.
+All phases in PLAN.md are done. Tests: `pytest backend/tests` 38 passed, `npm test` (frontend) 4 passed.
 Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the cloud workspace (no JS errors, panels fill in, mode switch works). Check it on the Mac after `npm install`.
 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v2.2 — stocker/OHT sync and FOUP continuity (current)
+## v2.3 — process tools (current)
+- Every bay load port has a tool that takes delivered FOUPs in and processes them. A FOUP rests 1 s on the port, slides along the tray into the tool (3 s), waits in the tool buffer, and is processed one lot at a time (4–10 min by process, ±20%). Tools start with WIP, like a running fab.
+- Tool status light: green, pulsing = processing (progress bar on the tool face); blue = FOUP sliding in or out; amber = lots waiting inside; gray = idle. The tool body also glows while processing. New camera button: Tool.
+- Requests that start at a tool: the simulator draws requests 3 s ahead from the same random stream, so the tool pushes the FOUP out before the request appears. **Transport and RL results are bit-identical to v2.2**, checked episode by episode against the v2.2 evaluation and by a test that the job stream is unchanged. The v2.2 evaluation below therefore still applies.
+- Rendering bug fixed: three.js computes an InstancedMesh's bounding sphere once. The meshes for FOUPs on ports (and the new sliding FOUPs) were first rendered while empty, so they were culled from then on. **FOUPs waiting on load ports were never actually visible in v2.1–v2.2.** Dynamic instance meshes are now never frustum-culled.
+- Metric `stockerWaitTime` was renamed `portWaitTime`.
+- Checked in real WebGL: tools light up and show progress, FOUPs slide in and out (261 frame checks, 0 missing). Tests: backend 38 passed.
+
+## v2.2 — stocker/OHT sync and FOUP continuity
 - An OHT that reaches a stocker port before the crane has delivered the FOUP now **waits there** with its gripper up (metric `stockerWaitTime`), instead of lifting a FOUP that was still on the shelf. Crane retrievals now go before queued stores.
 - The FOUP being hoisted is drawn by the client with the same interpolated hoist progress as the gripper. The server leaves that port out of `portFoups`, so the FOUP no longer pops in or out at the half-way point or slides off the port. A load port shows one FOUP: further lots for the same port wait inside the tool.
 - Delivered FOUPs are taken into the tool 8 s after the drop (was 25 s).
