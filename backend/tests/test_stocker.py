@@ -1,5 +1,5 @@
 from backend.sim.fab import FabSimulation
-from backend.sim.stocker import Stocker
+from backend.sim.stocker import AISLE_U, CONV_T, DY, FAR_U, NEAR_U, Stocker
 
 
 def _sk():
@@ -11,23 +11,33 @@ def run(sk, seconds, dt=0.2):
         sk.update(dt)
 
 
-def test_store_moves_foup_from_port_to_shelf():
+def test_store_conveys_in_then_crane_shelves_it():
     sk = _sk()
     n0 = int(sk.occ.sum())
     sk.store("S-P1")
-    assert sk.port_has_foup("S-P1")
+    assert [c[1] for c in sk.conv] == ["in"] and not sk.tasks  # the stage conveyor carries it in first
+    run(sk, CONV_T + 0.2)
+    assert [c[1] for c in sk.conv] == ["inner"] or sk.carry  # waiting at the inner end for the crane
     run(sk, 40)
-    assert not sk.port_has_foup("S-P1") and int(sk.occ.sum()) == n0 + 1 and sk.done == 1 and not sk.carry
+    assert not sk.conv and int(sk.occ.sum()) == n0 + 1 and sk.done == 1 and not sk.carry
 
 
-def test_retrieve_puts_foup_on_port_and_vehicle_takes_it():
+def test_retrieve_crane_then_conveyor_out_to_stage():
     sk = _sk()
     n0 = int(sk.occ.sum())
     sk.retrieve("J1", "S-P2")
-    run(sk, 40)
-    assert "J1" in sk.ready and int(sk.occ.sum()) == n0 - 1
+    t_out = None
+    for _ in range(400):
+        sk.update(0.1)
+        if t_out is None and any(c[1] == "out" for c in sk.conv):
+            t_out = sk.t
+            assert "J1" not in sk.ready  # not on the stage until the conveyor has carried it out
+        if "J1" in sk.ready:
+            break
+    assert t_out is not None and sk.t - t_out >= CONV_T - 0.11
+    assert int(sk.occ.sum()) == n0 - 1 and [c[1] for c in sk.conv] == ["stage"]
     sk.picked("J1")
-    assert "J1" not in sk.ready
+    assert "J1" not in sk.ready and not sk.conv
 
 
 def test_vehicle_before_crane_cancels_retrieval():
@@ -42,6 +52,36 @@ def test_vehicle_before_crane_cancels_retrieval():
     assert not sk.ready  # J1's FOUP vanished when placed: the vehicle already has it
 
 
+def test_fork_enters_low_lifts_and_turns_for_the_far_rack():
+    sk = _sk()
+    far = [i for i, c in enumerate(sk.cells) if c[0] == 1]
+    sk.occ[:] = 0
+    sk.occ[far[5]] = 1  # the only stored FOUP is on the far rack
+    u, z, y = sk.cell_pos(far[5])
+    sk.retrieve("J1", "S-P1")
+    seen_far = seen_near = False
+    prev_carry = False
+    for _ in range(4000):
+        sk.update(0.02)
+        ext = sk.fork - AISLE_U
+        if abs(ext) > 1e-6:  # fork out: turned to that side, never while turning
+            assert sk.rot == (1.0 if ext > 0 else 0.0)
+            seen_far |= ext > 0
+            seen_near |= ext < 0
+        if 0 < sk.rot < 1:
+            assert abs(ext) < 1e-9
+        if not prev_carry and sk.carry:  # taken when the fork top reached the shelf surface (then keeps rising)
+            assert y - 1e-6 <= sk.y <= y + 0.02 * 0.35 + 1e-6 and abs(sk.fork - u) < 1e-6
+        if sk.carry and abs(sk.fork - u) < 1e-6 and abs(sk.z - z) < 1e-6:
+            assert sk.y >= y - 1e-6  # carrying: never below the shelf it came from while still in it
+        if not sk.carry and abs(sk.fork - u) < 1e-6 and abs(sk.z - z) < 1e-6 and not prev_carry:
+            assert sk.y <= y + 1e-6  # entering empty: below the FOUP
+        prev_carry = sk.carry
+        if "J1" in sk.ready:
+            break
+    assert seen_far and seen_near and "J1" in sk.ready
+
+
 def test_crane_stays_inside_stocker():
     sk = _sk()
     for k in range(6):
@@ -50,7 +90,8 @@ def test_crane_stays_inside_stocker():
     for _ in range(1500):
         sk.update(0.2)
         assert min(zs) - 1e-6 <= sk.z <= max(zs) + 1e-6 or sk.z in (5.0, 2.0)
-        assert 0.9 - 1e-6 <= sk.y <= 3.45 + 1e-6 and -1e-6 <= sk.fork <= 3.5 + 1e-6
+        assert 0.9 - DY - 1e-6 <= sk.y <= 3.45 + DY + 1e-6 and NEAR_U - 1e-6 <= sk.fork <= FAR_U + 1e-6
+        assert 0.0 <= sk.rot <= 1.0
 
 
 def test_state_exposes_hoist_port_foups_and_stockers():

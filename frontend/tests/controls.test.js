@@ -23,3 +23,15 @@ test('wheel: trackpad swipe pans, pinch and mouse wheel zoom', () => {
   assert.equal(wheelAction({ deltaMode: 1, deltaX: 0, deltaY: 3, ctrlKey: false, shiftKey: true }), 'pan');
   assert.equal(isMouseWheel({ deltaMode: 0, deltaX: 0, deltaY: 40, wheelDeltaY: -120 }), true);
 });
+
+test('gripper closes on pickup and opens after drop', async () => {
+  // models.js imports three; test the pure function by re-implementing the import-free part
+  const src = (await import('node:fs')).readFileSync(new URL('../src/rendering/models.js', import.meta.url), 'utf8');
+  const fn = new Function(src.slice(src.indexOf('export function gripClosed')).replace('export ', '') + '; return gripClosed;')();
+  assert.equal(fn('LOADING', 0.2), 0);
+  assert.equal(fn('LOADING', 0.6), 1);
+  assert.equal(fn('UNLOADING', 0.3), 1);
+  assert.equal(fn('UNLOADING', 0.7), 0);
+  assert.equal(fn('TO_DROP', 0), 1);
+  assert.equal(fn('TO_PICKUP', 0), 0);
+});

@@ -2,6 +2,7 @@
 // All logistics run on the Python server; the browser only interpolates vehicle poses.
 import * as THREE from 'three';
 import { TOWER, TOWER_OFF, towerSegments } from './towerLamp.js';
+import { FOUP, GRIP, foupGeometry, plateGeometry, fingerGeometry, footGeometry, gripClosed } from './models.js';
 import { CameraController } from './CameraController.js';
 import { pointAt, samplePath, lerpAngle } from './pathUtils.js';
 
@@ -146,6 +147,8 @@ export class FabRenderer {
       this.world.add(badge);
       this.areaBadges.set(a.id, badge);
     }
+    this.foupGeo = foupGeometry();
+    this.foupMat = new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.4 });
     this.stockerViews = new Map();
     for (const sk of L.stockers || []) this.stockerViews.set(sk.id, this._buildStocker(sk, box));
     for (const n of L.decisionNodes) {
@@ -158,15 +161,18 @@ export class FabRenderer {
     // vehicles (instanced): body + FOUP
     const N = 256;
     this.vBody = new THREE.InstancedMesh(new THREE.BoxGeometry(1.0, 0.75, 0.7), new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.2 }), N);
-    this.vFoup = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.42, 0.45), new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.4 }), N);
+    this.vFoup = new THREE.InstancedMesh(this.foupGeo, this.foupMat, N);
     this.vHot = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3b47 }), N);
-    // hoist: gripper + 4 belts per vehicle; FOUPs sitting on load ports
-    this.vGrip = new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.12, 0.56), new THREE.MeshStandardMaterial({ color: 0x2b3138, metalness: 0.5, roughness: 0.4 }), N);
+    // hoist: gripper (plate + 2 fingers with feet that close under the FOUP flange) + 4 belts per vehicle
+    const gripMat = new THREE.MeshStandardMaterial({ color: 0x2b3138, metalness: 0.5, roughness: 0.4 });
+    this.vGrip = new THREE.InstancedMesh(plateGeometry(), gripMat, N);
+    this.vFinger = new THREE.InstancedMesh(fingerGeometry(), new THREE.MeshStandardMaterial({ color: 0x59626b, metalness: 0.6, roughness: 0.35 }), N * 2);
+    this.vFoot = new THREE.InstancedMesh(footGeometry(), new THREE.MeshStandardMaterial({ color: 0x59626b, metalness: 0.6, roughness: 0.35 }), N * 2);
     this.vBelt = new THREE.InstancedMesh(new THREE.BoxGeometry(0.03, 1, 0.07), new THREE.MeshStandardMaterial({ color: 0x15191d }), N * 4);
     this.pFoup = new THREE.InstancedMesh(this.vFoup.geometry, this.vFoup.material, 256);
     // dynamic instance sets: three.js computes an InstancedMesh's bounding sphere once (here, while it is
     // empty) and would then cull it forever, so these are never frustum-culled
-    for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vBelt, this.pFoup]) {
+    for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vFinger, this.vFoot, this.vBelt, this.pFoup]) {
       m.count = 0; m.castShadow = true; m.frustumCulled = false; this.world.add(m);
     }
     // load-port FOUPs, LP status lights, process progress bars (one per LP)
@@ -263,51 +269,89 @@ export class FabRenderer {
     for (const u of [sk.wallU, sk.backU]) for (const z of [-zEnd, zEnd]) add(frameMat, 0.12, top, 0.12, X(u), top / 2, z, true);
     for (const u of [sk.wallU, sk.backU]) add(frameMat, 0.1, 0.1, 2 * zEnd, X(u), top, 0);
     add(new THREE.MeshStandardMaterial({ color: 0x4f5964, roughness: 0.9 }), w, 0.04, 2 * zEnd, X(cu), 0.02, 0);
-    // racks: uprights at bay boundaries + shelf plates per level
+    // racks: uprights at bay boundaries, a back beam per level, and per cell two shelf pads with a groove
+    // between them: the crane's fork enters the groove below the FOUP and lifts it off the pads
     const rackLen = sk.bayZ.length * sk.bayPitch;
+    const padMat = new THREE.MeshStandardMaterial({ color: 0xa9b2bb, metalness: 0.35, roughness: 0.5 });
+    const padGeo = new THREE.BoxGeometry(0.8, 0.03, 0.17);
+    const nPads = sk.cells.length * 2;
+    const pads = new THREE.InstancedMesh(padGeo, padMat, nPads);
+    const dd = new THREE.Object3D();
+    let np = 0;
+    for (const [u, z, y] of sk.cells) {
+      for (const dz of [-0.2, 0.2]) {
+        dd.position.set(X(u), y - 0.015, z + dz); dd.updateMatrix();
+        pads.setMatrixAt(np++, dd.matrix);
+      }
+    }
+    pads.count = np;
+    g.add(pads);
     for (const [ru, rack] of [[sk.nearU, 0], [sk.farU, 1]]) {
+      const backU = rack === 0 ? ru - 0.42 : ru + 0.42;  // the rack's outer edge (away from the aisle)
       for (let b = 0; b <= sk.bayZ.length; b++) {
         const z = sk.bayZ[0] - sk.bayPitch / 2 + b * sk.bayPitch;
         for (const du of [-0.42, 0.42]) add(frameMat, 0.06, top - 0.2, 0.06, X(ru + du), (top - 0.2) / 2, z);
       }
       sk.levels.forEach((y, l) => {
-        if (rack === 0 && l === 0) return;  // I/O level on the lane side
-        add(shelfMat, 0.9, 0.04, rackLen, X(ru), y - 0.02, 0);
+        if (rack === 0 && l === 0) return;  // lane-side bottom level: port conveyors
+        add(frameMat, 0.05, 0.05, rackLen, X(backU), y - 0.045, 0);
       });
     }
-    // I/O ports: a shelf under the OHT rail + a short conveyor into the stocker
-    const lpMat = new THREE.MeshStandardMaterial({ color: 0x39424b, roughness: 0.6 });
-    const convMat = new THREE.MeshStandardMaterial({ color: 0x3f8f6b, roughness: 0.5 });
+    // in/out ports: stage under the OHT rail + conveyor (two belts with a groove) into the stocker
+    const beltMat = new THREE.MeshStandardMaterial({ color: 0x2f6f55, roughness: 0.6 });
+    const convFrame = new THREE.MeshStandardMaterial({ color: 0x4a535c, roughness: 0.5 });
+    const u0 = -0.38, u1 = sk.nearU + 0.42, cl = u1 - u0, cm = (u0 + u1) / 2;
     for (const p of sk.ports) {
-      add(lpMat, 0.75, PORT_TOP, 0.75, X(0), PORT_TOP / 2, p.z, true);
-      add(convMat, sk.nearU + 0.5, 0.06, 0.62, X((sk.nearU + 0.5) / 2), PORT_TOP - 0.03, p.z);
+      for (const dz of [-0.2, 0.2]) {
+        add(beltMat, cl, 0.04, 0.15, X(cm), PORT_TOP - 0.02, p.z + dz);
+        add(convFrame, cl, 0.08, 0.04, X(cm), PORT_TOP - 0.06, p.z + dz + Math.sign(dz) * 0.1);
+      }
+      for (const u of [u0 + 0.1, u1 - 0.1]) add(convFrame, 0.08, PORT_TOP - 0.1, 0.5, X(u), (PORT_TOP - 0.1) / 2, p.z, true);
+      add(convFrame, 0.06, 0.25, 0.62, X(u0 - 0.03), PORT_TOP + 0.08, p.z);  // end stop at the stage
     }
-    // stacker crane: floor + ceiling rail, mast, carriage, telescopic fork, carried FOUP
+    // stacker crane: floor + ceiling rail, mast, carriage with a turntable, single narrow fork
     add(frameMat, 0.16, 0.1, rackLen + 0.6, X(sk.aisleU), 0.05, 0);
     add(frameMat, 0.16, 0.1, rackLen + 0.6, X(sk.aisleU), top - 0.15, 0);
     const craneMat = new THREE.MeshStandardMaterial({ color: 0xffc21a, emissive: 0x3a2a00, metalness: 0.2, roughness: 0.45 });
     const crane = new THREE.Group();
-    const mast = new THREE.Mesh(box, craneMat); mast.scale.set(0.3, top - 0.25, 0.36); mast.position.set(X(sk.aisleU), (top - 0.25) / 2, 0); mast.castShadow = true;
-    const base = new THREE.Mesh(box, craneMat); base.scale.set(0.5, 0.25, 1.1); base.position.set(X(sk.aisleU), 0.2, 0);
-    const head = new THREE.Mesh(box, craneMat); head.scale.set(0.4, 0.2, 1.0); head.position.set(X(sk.aisleU), top - 0.2, 0);
+    const mastZ = -0.45;  // mast beside the carriage so the fork can turn freely
+    const mast = new THREE.Mesh(box, craneMat); mast.scale.set(0.3, top - 0.25, 0.22); mast.position.set(X(sk.aisleU), (top - 0.25) / 2, mastZ); mast.castShadow = true;
+    const base = new THREE.Mesh(box, craneMat); base.scale.set(0.5, 0.25, 1.3); base.position.set(X(sk.aisleU), 0.2, 0);
+    const head = new THREE.Mesh(box, craneMat); head.scale.set(0.4, 0.2, 1.1); head.position.set(X(sk.aisleU), top - 0.2, 0);
     crane.add(mast, base, head);
+    const lift = new THREE.Group();  // moves up/down with the fork top at y = 0
     const carriage = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0x2f3a45, metalness: 0.4 }));
-    carriage.scale.set(0.9, 0.22, 0.8);
-    const fork = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0xe0572b, roughness: 0.4 }));
-    const cFoup = new THREE.Mesh(this.vFoup ? this.vFoup.geometry : new THREE.BoxGeometry(0.5, FOUP_H, 0.45), new THREE.MeshStandardMaterial({ color: 0xf0f2f4, roughness: 0.4 }));
+    carriage.scale.set(0.7, 0.12, 0.95); carriage.position.set(X(sk.aisleU), -0.17, -0.05);
+    const table = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.05, 28), new THREE.MeshStandardMaterial({ color: 0x59626b, metalness: 0.6, roughness: 0.35 }));
+    table.position.set(X(sk.aisleU), -0.085, 0);
+    const turn = new THREE.Group();  // rotates on the turntable; local +x = fork direction
+    turn.position.set(X(sk.aisleU), 0, 0);
+    const forkBase = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0x3a434c, metalness: 0.5 }));
+    forkBase.scale.set(0.62, 0.05, 0.3); forkBase.position.set(0, -0.045, 0);
+    const tine = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0xe0572b, roughness: 0.4 }));
+    tine.castShadow = true;
+    const cFoup = new THREE.Mesh(this.foupGeo, this.foupMat);
     cFoup.castShadow = true;
-    crane.add(carriage, fork, cFoup);
+    turn.add(forkBase, tine, cFoup);
+    lift.add(carriage, table, turn);
+    crane.add(lift);
     g.add(crane);
-    // stored FOUPs
-    const stored = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, FOUP_H, 0.45), new THREE.MeshStandardMaterial({ color: 0xe9edf1, roughness: 0.45 }), sk.cells.length);
+    // stored FOUPs + FOUPs on the port conveyors
+    const stored = new THREE.InstancedMesh(this.foupGeo, this.foupMat, sk.cells.length);
     stored.count = 0;
     stored.frustumCulled = false;
+    stored.castShadow = true;
     g.add(stored);
+    const conv = new THREE.InstancedMesh(this.foupGeo, this.foupMat, 32);
+    conv.count = 0;
+    conv.frustumCulled = false;
+    conv.castShadow = true;
+    g.add(conv);
     const t = label(`${sk.id} crane · 00 tasks`, { size: 0.8, bg: 'rgba(160,110,20,.85)' });
     t.position.set(X(sk.aisleU), top + 0.8, -zEnd - 1.2);
     g.add(t);
     this.world.add(g);
-    return { sk, X, crane, carriage, fork, cFoup, stored, cells: '', label: t };
+    return { sk, X, crane, lift, turn, tine, cFoup, stored, conv, cells: '', label: t };
   }
 
   _simNow(now) {
@@ -469,20 +513,42 @@ export class FabRenderer {
   _animateStockers(now) {
     const span = this.tNext - this.tPrev;
     const t = span > 0 ? Math.min(1, Math.max(0, (now - this.tNext) / span)) : 1;
+    const sim = this._simNow(now);
+    const d = this.dummy;
     for (const [id, view] of this.stockerViews) {
       const b = this.skNext.get(id);
       if (!b) continue;
       const a = this.skPrev.get(id) || b;
-      const L = (k) => a[k] + (b[k] - a[k]) * t;
-      const z = L('z'), y = L('y'), fu = L('fork');
+      const L = (k) => (a[k] ?? b[k]) + (b[k] - (a[k] ?? b[k])) * t;
+      const z = L('z'), y = L('y'), fu = L('fork'), rot = L('rot');
       const { sk, X } = view;
       view.crane.position.z = z;
-      view.carriage.position.set(X(sk.aisleU), y - 0.09, 0);
-      const u0 = Math.min(sk.aisleU, fu), u1 = Math.max(sk.aisleU, fu);
-      view.fork.scale.set(Math.max(0.5, u1 - u0 + 0.3), 0.05, 0.42);
-      view.fork.position.set(X((u0 + u1) / 2), y - 0.02, 0);
+      view.lift.position.y = y;  // fork top
+      // turntable: 0 = fork towards the near rack (smaller u), 1 = towards the far rack
+      const nearDir = -sk.dir;  // world x direction of decreasing u
+      const ang = rot * Math.PI;
+      const dx = nearDir * Math.cos(ang), dz = Math.sin(ang);
+      view.turn.rotation.y = -Math.atan2(dz, dx);
+      const ext = Math.abs(fu - sk.aisleU);  // telescopic extension beyond the turntable
+      const len = 0.5 + ext;
+      view.tine.scale.set(len, 0.035, 0.15);
+      view.tine.position.set(ext + 0.25 - len / 2, -0.0175, 0);
       view.cFoup.visible = !!b.carry;
-      view.cFoup.position.set(X(fu), y + FOUP_H / 2, 0);
+      view.cFoup.position.set(ext, FOUP_H / 2, 0);
+      // conveyors: 'in' stage -> inner, 'inner' waiting for the crane, 'out' inner -> stage, 'stage' ready for an OHT
+      let n = 0;
+      d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
+      for (const [pid, kind, t0, t1] of b.conv || []) {
+        const p = sk.ports.find((q) => q.id === pid);
+        if (!p || n >= 32) continue;
+        const f = Math.min(1, Math.max(0, (sim - t0) / Math.max(1e-6, t1 - t0)));
+        const e = f * f * (3 - 2 * f);
+        const u = kind === 'in' ? sk.nearU * e : kind === 'out' ? sk.nearU * (1 - e) : kind === 'inner' ? sk.nearU : 0;
+        d.position.set(X(u), PORT_TOP + FOUP_H / 2, p.z); d.updateMatrix();
+        view.conv.setMatrixAt(n++, d.matrix);
+      }
+      view.conv.count = n;
+      view.conv.instanceMatrix.needsUpdate = true;
       if (view._q !== b.queue) {
         view._q = b.queue;
         setLabel(view.label, `${id} crane · ${b.queue ? b.queue + ' task' + (b.queue > 1 ? 's' : '') : 'idle'}`, 'rgba(160,110,20,.85)');
@@ -506,7 +572,7 @@ export class FabRenderer {
       const vs = this.vehicles;
       const d = this.dummy;
       const col = new THREE.Color();
-      let nf = 0, nh = 0, nb = 0;
+      let nf = 0, nh = 0, nb = 0, nfi = 0;
       const full = this.H - 0.6 - (PORT_TOP + FOUP_H / 2);  // FOUP travel from the vehicle down to the port
       const hb = this.H - 0.375;  // vehicle body bottom
       for (let i = 0; i < vs.length; i++) {
@@ -517,14 +583,24 @@ export class FabRenderer {
         this.vBody.setColorAt(i, col.setHex(STATE_COLOR[v.state] ?? 0x999999));
         const hoisting = v.state === 'LOADING' || v.state === 'UNLOADING';
         const depth = hoisting ? full * hoistDepth(p.hp) : 0;
-        const gy = this.H - 0.6 + FOUP_H / 2 + 0.06 - depth;  // gripper sits on top of the FOUP
-        d.position.set(p.x, gy, p.z); d.updateMatrix();
+        const fc = this.H - 0.6 - depth;  // centre of the FOUP held (or about to be held) by the gripper
+        const cs = Math.cos(p.h), sn = Math.sin(p.h);
+        const at = (ox, y, oz) => d.position.set(p.x + ox * cs - oz * sn, y, p.z + ox * sn + oz * cs);
+        at(0, fc + GRIP.plateY, 0); d.updateMatrix();
         this.vGrip.setMatrixAt(i, d.matrix);
-        const blen = hb - (gy + 0.06);
+        const g = gripClosed(v.state, p.hp);
+        const fx = GRIP.openX + (GRIP.closedX - GRIP.openX) * g;
+        for (const sgn of [-1, 1]) {  // fingers hang beside the flange; their feet slide under it when closed
+          at(sgn * fx, fc + GRIP.fingerY, 0); d.updateMatrix();
+          this.vFinger.setMatrixAt(nfi, d.matrix);
+          at(sgn * (fx - 0.035), fc + GRIP.footY, 0); d.updateMatrix();
+          this.vFoot.setMatrixAt(nfi++, d.matrix);
+        }
+        const btop = fc + GRIP.plateY + 0.025;
+        const blen = hb - btop;
         if (blen > 0.03) {
-          for (const [ox, oz] of [[-0.24, -0.2], [0.24, -0.2], [-0.24, 0.2], [0.24, 0.2]]) {
-            const c = Math.cos(p.h), sn = Math.sin(p.h);
-            d.position.set(p.x + ox * c - oz * sn, gy + 0.06 + blen / 2, p.z + ox * sn + oz * c);
+          for (const [ox, oz] of [[-0.17, -0.14], [0.17, -0.14], [-0.17, 0.14], [0.17, 0.14]]) {
+            at(ox, btop + blen / 2, oz);
             d.scale.set(1, blen, 1); d.updateMatrix();
             this.vBelt.setMatrixAt(nb++, d.matrix);
           }
@@ -550,8 +626,8 @@ export class FabRenderer {
         }
       }
       this.vBody.count = vs.length; this.vFoup.count = nf; this.vHot.count = nh;
-      this.vGrip.count = vs.length; this.vBelt.count = nb;
-      for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vBelt]) {
+      this.vGrip.count = vs.length; this.vBelt.count = nb; this.vFinger.count = nfi; this.vFoot.count = nfi;
+      for (const m of [this.vBody, this.vFoup, this.vHot, this.vGrip, this.vFinger, this.vFoot, this.vBelt]) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       }

@@ -1,9 +1,16 @@
 """Stocker interior: shelves + one stacker crane per stocker (visual model).
 
-The crane stores FOUPs that OHTs drop on a stocker port and retrieves FOUPs to the port for
-jobs that start at the stocker (retrievals have priority). An OHT that reaches the port before
-the crane has delivered the FOUP waits there with its gripper up (fab metric stockerWaitTime).
-It uses its own random generator so it does not change the demand random stream.
+In/out ports: the OHT puts a FOUP on the stage under the rail; the port conveyor carries it into
+the stocker (inner position, at the near rack's bottom level). The crane takes it from there.
+Outbound FOUPs are put on the inner position by the crane and conveyed out to the stage.
+
+Crane: travels along the aisle (z), lifts (y = fork top), turns its fork 180 degrees on a
+turntable to serve the near or the far rack, and extends a narrow fork (u). Shelves and conveyors
+have a groove in the middle: the fork enters below the FOUP, lifts it off the two shelf pads,
+retracts; to put down it enters above, lowers until the FOUP rests on the pads, retracts.
+
+Retrievals have priority. An OHT that reaches the port before the FOUP is on the stage waits
+there with its gripper up (fab metric portWaitTime). The stocker uses its own random generator.
 
 Local coordinates per stocker: u = metres from the OHT lane into the stocker (0 = under the
 rail, where the I/O port shelves are), z = world z, y = height. worldX = laneX + dir * u.
@@ -16,9 +23,13 @@ from typing import Dict, List, Optional
 import numpy as np
 
 WALL_U, NEAR_U, AISLE_U, FAR_U, BACK_U = 0.6, 1.1, 2.3, 3.5, 4.0
-LEVELS = [0.9, 1.75, 2.6, 3.45]  # shelf surface heights; port shelves are at LEVELS[0]
+LEVELS = [0.9, 1.75, 2.6, 3.45]  # shelf surface heights; the port conveyors' inner end is at LEVELS[0]
 N_BAYS, BAY_PITCH = 12, 1.7
-TRAVEL_V, LIFT_V, FORK_V, TRANSFER_T = 2.5, 1.0, 1.6, 0.6
+TRAVEL_V, LIFT_V, FORK_V = 3.5, 1.5, 2.0
+FINE_V = 0.35  # slow lift under / onto the FOUP
+DY = 0.07  # fork top below (pick) or above (place) the shelf surface when entering
+TURN_T = 1.2  # 180 degree turn of the fork
+CONV_T = 2.5  # port conveyor stage <-> inner position
 
 
 class Stocker:
@@ -27,19 +38,22 @@ class Stocker:
         self.ports = ports  # port id -> z
         z0 = -(N_BAYS - 1) * BAY_PITCH / 2
         self.bay_z = [z0 + i * BAY_PITCH for i in range(N_BAYS)]
-        # cells: (rack 0 = near/lane side, 1 = far), bay, level. Near rack level 0 is the I/O opening.
+        # cells: (rack 0 = near/lane side, 1 = far), bay, level. Near rack level 0 holds the port conveyors.
         self.cells = [(r, b, l) for r in (0, 1) for b in range(N_BAYS) for l in range(len(LEVELS)) if not (r == 0 and l == 0)]
         self.rng = np.random.default_rng(seed)
         self.occ = (self.rng.random(len(self.cells)) < fill).astype(np.int8)
         self.tasks: deque = deque()
-        self.port_items: Dict[str, int] = {p: 0 for p in ports}  # FOUPs waiting on a port to be stored
-        self.ready: set = set()  # job ids whose FOUP the crane has put on the port
+        self.conv: List[list] = []  # [port, kind 'in'|'inner'|'out', t0, t1, job]
+        self.ready: set = set()  # job ids whose FOUP is on the stage
         self.cancelled: set = set()
         self.z, self.y, self.fork = 0.0, LEVELS[1], AISLE_U
+        self.side = -1  # fork faces the near rack (-1) or the far rack (+1)
+        self.rot = 0.0  # 0 = facing near, 1 = facing far (animated during a turn)
         self.carry = False
         self.task: Optional[dict] = None
         self.legs: List[tuple] = []
         self.done = 0
+        self.t = 0.0
 
     # ------------------------------------------------------------ geometry
     def cell_pos(self, i: int):
@@ -49,16 +63,16 @@ class Stocker:
     def to_dict(self) -> dict:
         return {"id": self.id, "laneX": self.lane_x, "dir": self.dir, "wallU": WALL_U, "nearU": NEAR_U, "aisleU": AISLE_U,
                 "farU": FAR_U, "backU": BACK_U, "levels": LEVELS, "bayZ": self.bay_z, "bayPitch": BAY_PITCH,
-                "cells": [list(self.cell_pos(i)) for i in range(len(self.cells))],
+                "cells": [list(self.cell_pos(i)) for i in range(len(self.cells))], "convT": CONV_T,
                 "ports": [{"id": p, "z": z} for p, z in self.ports.items()]}
 
     # ------------------------------------------------------------ requests
     def store(self, port: str) -> None:
-        self.port_items[port] += 1
-        self.tasks.append({"kind": "STORE", "port": port})
+        """An OHT has put a FOUP on the stage: convey it in, then the crane stores it."""
+        self.conv.append([port, "in", self.t, self.t + CONV_T, None])
 
     def retrieve(self, job_id: str, port: str) -> None:
-        """Retrievals go before queued stores: an OHT may be waiting for this FOUP, a store can wait on its port."""
+        """Retrievals go before queued stores: an OHT may be waiting for this FOUP."""
         task = {"kind": "RETRIEVE", "port": port, "job": job_id}
         for i, t in enumerate(self.tasks):
             if t["kind"] == "STORE":
@@ -67,9 +81,10 @@ class Stocker:
         self.tasks.append(task)
 
     def picked(self, job_id: str) -> None:
-        """The OHT has lifted the FOUP of job_id from the port."""
+        """The OHT has lifted the FOUP of job_id from the stage."""
         if job_id in self.ready:
             self.ready.discard(job_id)
+            self.conv = [c for c in self.conv if c[4] != job_id]
             return
         for t in list(self.tasks):  # vehicle came before the crane: drop the pending retrieval
             if t["kind"] == "RETRIEVE" and t["job"] == job_id:
@@ -87,39 +102,67 @@ class Stocker:
             return int(idx[int(np.argmin(d))])
         return int(self.rng.choice(idx))
 
+    @staticmethod
+    def _pick_legs(u, z, y):
+        side = -1 if u < AISLE_U else 1
+        return [("face", side), ("move", z, y - DY), ("fork", u), ("lift", y), ("take",), ("lift", y + DY), ("fork", AISLE_U)]
+
+    @staticmethod
+    def _place_legs(u, z, y):
+        side = -1 if u < AISLE_U else 1
+        return [("face", side), ("move", z, y + DY), ("fork", u), ("lift", y), ("give",), ("lift", y - DY), ("fork", AISLE_U)]
+
     def _plan(self, task: dict) -> None:
-        pz = self.ports[task["port"]]
+        inner = (NEAR_U, self.ports[task["port"]], LEVELS[0])  # inner end of the port conveyor
         if task["kind"] == "STORE":
-            c = self._pick_cell(True, pz)
-            u, z, y = self.cell_pos(c)
-            src, dst = (0.0, pz, LEVELS[0]), (u, z, y)
+            c = self._pick_cell(True, inner[1])
+            self.legs = self._pick_legs(*inner) + self._place_legs(*self.cell_pos(c))
         else:
-            c = self._pick_cell(False, pz)
-            u, z, y = self.cell_pos(c)
-            src, dst = (u, z, y), (0.0, pz, LEVELS[0])
+            c = self._pick_cell(False, inner[1])
+            self.legs = self._pick_legs(*self.cell_pos(c)) + self._place_legs(*inner)
         task["cell"] = c
-        # legs: (kind, target...)
-        self.legs = [("move", src[1], src[2]), ("fork", src[0]), ("take",), ("fork", AISLE_U),
-                     ("move", dst[1], dst[2]), ("fork", dst[0]), ("give",), ("fork", AISLE_U)]
-        self.timer = 0.0
 
     def update(self, dt: float) -> None:
+        self.t += dt
+        for c in self.conv:  # port conveyors
+            if c[1] == "in" and self.t >= c[3]:
+                c[1], c[2] = "inner", c[3]
+                self.tasks.append({"kind": "STORE", "port": c[0], "conv": c})
+            elif c[1] == "out" and self.t >= c[3]:
+                c[1] = "stage"
+                self.ready.add(c[4])
         budget = dt
         while budget > 1e-9:
             if not self.legs:
                 if self.task is not None:
-                    self._finish(self.task)
+                    self.done += 1
                     self.task = None
                 if not self.tasks:
                     return
                 self.task = self.tasks.popleft()
                 self._plan(self.task)
             leg = self.legs[0]
-            if leg[0] == "move":
-                dz, dy = leg[1] - self.z, leg[2] - self.y
-                need = max(abs(dz) / TRAVEL_V, abs(dy) / LIFT_V)
+            kind = leg[0]
+            if kind == "face":
+                if leg[1] == self.side:
+                    self.legs.pop(0)
+                    continue
+                target = 0.0 if leg[1] < 0 else 1.0
+                step = budget / TURN_T
+                if abs(target - self.rot) <= step:
+                    budget -= abs(target - self.rot) * TURN_T
+                    self.rot, self.side = target, leg[1]
+                    self.legs.pop(0)
+                else:
+                    self.rot += step if target > self.rot else -step
+                    budget = 0
+            elif kind in ("move", "lift"):
+                tz = leg[1] if kind == "move" else self.z
+                ty = leg[2] if kind == "move" else leg[1]
+                dz, dy = tz - self.z, ty - self.y
+                need = max(abs(dz) / TRAVEL_V, abs(dy) / (LIFT_V if kind == "move" else FINE_V))
                 if need <= budget:
-                    self.z, self.y = leg[1], leg[2]
+                    self.z, self.y = tz, ty
                     budget -= need
                     self.legs.pop(0)
                 else:
@@ -127,7 +170,7 @@ class Stocker:
                     self.z += dz * f
                     self.y += dy * f
                     budget = 0
-            elif leg[0] == "fork":
+            elif kind == "fork":
                 d = leg[1] - self.fork
                 need = abs(d) / FORK_V
                 if need <= budget:
@@ -137,14 +180,8 @@ class Stocker:
                 else:
                     self.fork += np.sign(d) * FORK_V * budget
                     budget = 0
-            else:  # take / give
-                self.timer += budget
-                if self.timer < TRANSFER_T:
-                    budget = 0
-                    continue
-                budget = self.timer - TRANSFER_T
-                self.timer = 0.0
-                self._transfer(leg[0])
+            else:  # take / give: the fork top is flush with the shelf surface
+                self._transfer(kind)
                 self.legs.pop(0)
 
     def _transfer(self, kind: str) -> None:
@@ -152,7 +189,7 @@ class Stocker:
         if kind == "take":
             self.carry = True
             if t["kind"] == "STORE":
-                self.port_items[t["port"]] = max(0, self.port_items[t["port"]] - 1)
+                self.conv = [c for c in self.conv if c is not t.get("conv")]
             else:
                 self.occ[t["cell"]] = 0
         else:
@@ -162,18 +199,13 @@ class Stocker:
             elif t["job"] in self.cancelled:
                 self.cancelled.discard(t["job"])
             else:
-                self.ready.add(t["job"])
-
-    def _finish(self, task: dict) -> None:
-        self.done += 1
-
-    def port_has_foup(self, port: str) -> bool:
-        return self.port_items.get(port, 0) > 0
+                self.conv.append([t["port"], "out", self.t, self.t + CONV_T, t["job"]])
 
     def state(self) -> dict:
         return {"id": self.id, "z": round(self.z, 3), "y": round(self.y, 3), "fork": round(float(self.fork), 3),
-                "carry": self.carry, "cells": "".join("1" if o else "0" for o in self.occ),
-                "queue": len(self.tasks) + (1 if self.task else 0), "done": self.done}
+                "rot": round(self.rot, 3), "carry": self.carry, "cells": "".join("1" if o else "0" for o in self.occ),
+                "queue": len(self.tasks) + (1 if self.task else 0), "done": self.done,
+                "conv": [[c[0], c[1], round(c[2], 2), round(c[3], 2)] for c in self.conv]}
 
 
 def build_stockers(layout, seed: int) -> Dict[str, Stocker]:

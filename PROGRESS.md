@@ -1,13 +1,32 @@
 # PROGRESS — AI OHT Fab
 
 ## Status
-All phases in PLAN.md are done. Tests: `pytest backend/tests` 40 passed, `npm test` (frontend) 4 passed.
+All phases in PLAN.md are done. Tests: `pytest backend/tests` 41 passed, `npm test` (frontend) 4 passed.
 Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the cloud workspace (no JS errors, panels fill in, mode switch works). Check it on the Mac after `npm install`.
 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v3.1 — tower lamps, trackpad camera (current)
+## v3.2 — FOUP handle, OHT gripper, stocker conveyors and turntable crane (current)
+- FOUP model: shell, side handles and the top flange (robotic handle). OHT gripper: a plate on 4 belts with two fingers whose feet close under the flange at the port (and open after a drop).
+- Stocker in/out ports: the OHT sets the FOUP on the stage under the rail. A port conveyor (2.5 s) carries it to the inner end, where the crane takes it; outbound runs the other way. Retrieved FOUPs are ready for the OHT only once they are on the stage.
+- Stocker shelves and conveyors hold a FOUP on two pads with a groove between them. The crane's single narrow fork enters the groove below the FOUP, lifts slowly until it carries it, and retracts. To put a FOUP down it enters above and lowers until the FOUP rests on the pads.
+- The fork sits on a turntable and turns 180° (1.2 s) to serve the rack on the other side of the aisle; it is retracted while turning. Crane speeds raised to typical stocker values (travel 3.5 m/s, lift 1.5 m/s, fork 2 m/s).
+- Tests: stocker tests rewritten (conveyor in/out, fork enters low and lifts, turn before reaching the far rack, never extended while turning); backend 41 passed, frontend 7 passed. Checked in real WebGL (gripper on the flange, grooved shelves, conveyors, crane mid-turn).
+- Stocker timing changed, so the policies were re-evaluated (7 scenarios × 5 seeds):
+
+| policy | mean reward | moves/h | avg delivery s | lots processed / 30 min | OHT wait at stocker ports s/episode |
+|---|---|---|---|---|---|
+| rule_preassign | **2866** | 958 | 143.6 | 384.3 | 184 |
+| ppo(oht_ppo3_b) | 2836 | 955 | 145.3 | 380.5 | 189 |
+| ppo(oht_bc3) | 2810 | 951 | 145.5 | 381.8 | 193 |
+| ppo(oht_ppo3_a) | 2797 | 948 | 146.2 | 381.9 | 190 |
+| rule_basic | 2400 | 901 | 162.1 | 357.9 | 174 |
+| rule_smart | 2306 | 888 | 166.9 | 355.3 | 154 |
+
+  The same picture as v3: the AI models beat rule_smart (+490 to +530, 30/35 wins) but stay slightly below their teacher rule_preassign (oht_ppo3_b −30 ± 19, oht_bc3 −56 ± 20). No deadlocks.
+
+## v3.1 — tower lamps, trackpad camera
 - Tower lamp on every tool (red / orange / green / blue, top to bottom). Blue = processing, green = processing finished and transport requested, orange = not processing, red = alarm (blinking) / manual (steady). Several segments can be lit together. Red is wired through `POST /api/fab/tool-mode` (a tool in alarm or manual starts no new lot) but never raised by the simulation. Load-port lamps were recoloured to match: blue processing, green waiting for OHT.
 - Camera: a two-finger trackpad swipe now pans the view over the floor; pinch (ctrlKey wheel) zooms; a mouse wheel still zooms (Shift + wheel pans). Wheel and tower logic are in `rendering/wheel.js` and `rendering/towerLamp.js`, with unit tests (`npm test`: 6 passed).
 - Checked in real WebGL: tower states for alarm / manual / processing / finished, swipe moves camera and target together (distance unchanged), pinch zooms.

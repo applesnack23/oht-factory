@@ -833,7 +833,7 @@ class FabSimulation:
             "time": round(self.time, 2), "seed": self.seed, "scenario": self.cfg.get("scenario"),
             "vehicles": vs, "jobs": [j.to_dict(self.time) for j in pend[:40]], "areas": self.area_stats(),
             "blocked": [e.id for e in self.track.edges if e.blocked], "metrics": self.summary(),
-            "portFoups": self.port_foups(), "stockers": [sk.state() for sk in self.stockers.values()],
+            "portFoups": self.port_foups(), "stockers": self._stocker_states(),
             "tools": {"lps": self.flow.view(self._hoisting_ports()), "dock": self.flow.dock_t, "modes": self.flow.modes()},
         }
         if include_events:
@@ -841,17 +841,18 @@ class FabSimulation:
         return st
 
     def port_foups(self) -> List[str]:
-        """Load ports holding a FOUP (3D view). The FOUP a vehicle is hoisting is drawn with the vehicle (`port`)."""
-        t = self.time
-        out = set()
-        for j in self.jobs.values():  # tool load ports are drawn from tools.lps; here only stocker ports
-            if j.state in ("PENDING", "ASSIGNED") and j.src_area in self.stockers and j.id in self.stockers[j.src_area].ready:
-                out.add(j.src)
+        """Kept for API compatibility: FOUPs on tool load ports come in tools.lps, on stocker ports in
+        stockers[].conv, and the FOUP a vehicle is hoisting is drawn with the vehicle."""
+        return []
+
+    def _stocker_states(self) -> List[dict]:
+        hoisting = self._hoisting_ports()
+        out = []
         for sk in self.stockers.values():
-            out.update(p for p in sk.ports if sk.port_has_foup(p))
-        # a port where an OHT is hoisting shows only that OHT's FOUP (drawn by the client); a load port
-        # holds one FOUP, further lots for the same port wait inside the tool / stocker
-        return sorted(out - self._hoisting_ports())
+            st = sk.state()  # a FOUP on the stage that an OHT is lifting is drawn with the OHT
+            st["conv"] = [c for c in st["conv"] if not (c[1] == "stage" and c[0] in hoisting)]
+            out.append(st)
+        return out
 
     def _hoisting_ports(self) -> set:
         out = set()
