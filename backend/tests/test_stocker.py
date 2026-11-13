@@ -3,7 +3,8 @@ from backend.sim.stocker import AISLE_U, CONV_T, DY, FAR_U, NEAR_U, Stocker
 
 
 def _sk():
-    return Stocker("S", -5.0, -1, {"S-P1": 5.0, "S-P2": 2.0}, seed=3, fill=0.5)
+    return Stocker("S", -5.0, -1, {"S-IN1": 7.0, "S-P1": 5.0, "S-P2": 2.0, "S-OUT2": -1.0}, seed=3, fill=0.5,
+                   io={"S-IN1": "IN", "S-P1": "IN", "S-P2": "OUT", "S-OUT2": "OUT"})
 
 
 def run(sk, seconds, dt=0.2):
@@ -15,9 +16,11 @@ def test_store_conveys_in_then_crane_shelves_it():
     sk = _sk()
     n0 = int(sk.occ.sum())
     sk.store("S-P1")
-    assert [c[1] for c in sk.conv] == ["in"] and not sk.tasks  # the stage conveyor carries it in first
+    assert [c[1] for c in sk.conv] == ["stage_in"] and not sk.tasks and not sk.can_drop("S-P1")
+    sk.update(0.1)
+    assert [c[1] for c in sk.conv] == ["in"] and sk.can_drop("S-P1")  # conveyed in, the stage is free again
     run(sk, CONV_T + 0.2)
-    assert [c[1] for c in sk.conv] == ["inner"] or sk.carry  # waiting at the inner end for the crane
+    assert [c[1] for c in sk.conv] == ["inner_in"] or sk.carry  # waiting at the inner end for the crane
     run(sk, 40)
     assert not sk.conv and int(sk.occ.sum()) == n0 + 1 and sk.done == 1 and not sk.carry
 
@@ -42,8 +45,8 @@ def test_retrieve_crane_then_conveyor_out_to_stage():
 
 def test_vehicle_before_crane_cancels_retrieval():
     sk = _sk()
-    sk.retrieve("J1", "S-P1")
-    sk.retrieve("J2", "S-P2")
+    sk.retrieve("J1", "S-P2")
+    sk.retrieve("J2", "S-OUT2")
     run(sk, 1.0)  # J1 in progress, J2 queued
     sk.picked("J2")
     assert all(t.get("job") != "J2" for t in sk.tasks)
@@ -58,7 +61,7 @@ def test_fork_enters_low_lifts_and_turns_for_the_far_rack():
     sk.occ[:] = 0
     sk.occ[far[5]] = 1  # the only stored FOUP is on the far rack
     u, z, y = sk.cell_pos(far[5])
-    sk.retrieve("J1", "S-P1")
+    sk.retrieve("J1", "S-P2")
     seen_far = seen_near = False
     prev_carry = False
     for _ in range(4000):
@@ -82,14 +85,34 @@ def test_fork_enters_low_lifts_and_turns_for_the_far_rack():
     assert seen_far and seen_near and "J1" in sk.ready
 
 
+def test_one_foup_per_port_position_and_out_port_backpressure():
+    sk = _sk()
+    for k in range(4):
+        sk.retrieve(f"J{k}", "S-P2")  # four retrievals onto one OUT port, nobody picks up yet
+    for _ in range(600):
+        sk.update(0.1)
+        slots = {}
+        for c in sk.conv:
+            slot = "stage" if c[1] in ("stage", "stage_in") else "inner" if c[1].startswith("inner") else "moving"
+            slots[(c[0], slot)] = slots.get((c[0], slot), 0) + 1
+        assert max(slots.values(), default=0) <= 1
+    # stage + inner end are full, the other two wait in the rack; picking one lets the next come out
+    assert sorted(c[1] for c in sk.conv) == ["inner_out", "stage"] and len(sk.tasks) == 2
+    first = next(c[4] for c in sk.conv if c[1] == "stage")
+    sk.picked(first)
+    run(sk, 30)
+    assert len(sk.ready) == 1 and first not in sk.ready
+
+
 def test_crane_stays_inside_stocker():
     sk = _sk()
     for k in range(6):
         sk.store("S-P1") if k % 2 else sk.retrieve(f"J{k}", "S-P2")
     zs = sk.bay_z
+    zs = list(zs) + [7.0, 5.0, 2.0, -1.0]
     for _ in range(1500):
         sk.update(0.2)
-        assert min(zs) - 1e-6 <= sk.z <= max(zs) + 1e-6 or sk.z in (5.0, 2.0)
+        assert min(zs) - 1e-6 <= sk.z <= max(zs) + 1e-6
         assert 0.9 - DY - 1e-6 <= sk.y <= 3.45 + DY + 1e-6 and NEAR_U - 1e-6 <= sk.fork <= FAR_U + 1e-6
         assert 0.0 <= sk.rot <= 1.0
 
@@ -133,3 +156,29 @@ def test_oht_waits_for_crane_and_foup_is_never_lost():
     assert calls and all(calls)  # every stocker FOUP was on the port when the OHT lifted it
     assert not any(sk.cancelled for sk in f.stockers.values())
 
+
+
+def test_in_out_ports_and_rebinding_keep_the_fab_moving():
+    """IN ports only receive, OUT ports only send; an OHT at an OUT port takes the FOUP on the stage
+    (jobs are re-bound), so OHTs never deadlock waiting for 'their' FOUP behind another one."""
+    from backend.ai.oht_env import OHTEnv, eval_seeds
+    from backend.policies.rules import PreassignRulePolicy
+    env = OHTEnv("high_load", seed_mode="eval")
+    obs, _ = env.reset(seed=eval_seeds(1)[0])
+    pol = PreassignRulePolicy(env)
+    f = env.unwrapped.fab
+    done = False
+    while not done:
+        obs, r, te, tr, _ = env.step(pol.act(obs))
+        done = te or tr
+        for j in f.jobs.values():
+            if j.src_area in f.stockers:
+                assert f.layout.ports[j.src].io == "OUT"
+            if j.dst_area in f.stockers:
+                assert f.layout.ports[j.dst].io == "IN"
+        for sk in f.stockers.values():
+            for c in sk.conv:
+                assert (sk.io[c[0]] == "IN") == (c[1] in ("stage_in", "in", "inner_in"))
+    s = f.summary()
+    assert not s["deadlock"] and s["delivered"] > 400
+    assert s["portWaitTime"] < 0.02 * 1800 * len(f.vehicles)  # waiting at ports stays a small share of fleet time

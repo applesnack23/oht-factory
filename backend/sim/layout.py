@@ -28,10 +28,11 @@ class Port:
     z: float
     tool_x: float
     tool_z: float
+    io: str = ""  # stocker ports: IN (OHT drops) or OUT (OHT picks up)
 
     def to_dict(self):
         return {"id": self.id, "edge": self.edge, "offset": round(self.offset, 3), "area": self.area, "kind": self.kind,
-                "process": self.process, "x": self.x, "z": self.z, "toolX": self.tool_x, "toolZ": self.tool_z}
+                "process": self.process, "x": self.x, "z": self.z, "toolX": self.tool_x, "toolZ": self.tool_z, "io": self.io}
 
 
 @dataclass
@@ -160,11 +161,13 @@ class FabLayout:
         lane = max(edges, key=lambda e: T.edges[e].length if isinstance(T.edges[e].piece, Straight) else 0)
         area = Area(s["id"], "STOCKER", "STOCKER", s["side"], bx, 0.0)
         e = T.edges[lane]
-        for k in range(s["ports"]):
+        n_in = s.get("inPorts", s["ports"] // 2)
+        for k in range(s["ports"]):  # upstream ports are inputs, downstream outputs (drop, then pick up further on)
             o = 2.0 + 3.0 * k
             x, z = e.piece.point(o)
-            pid = f"{s['id']}-P{k + 1}"
-            self.ports[pid] = Port(pid, lane, o, s["id"], "STOCKER", "STOCKER", x, z, bx, z)
+            io = "IN" if k < n_in else "OUT"
+            pid = f"{s['id']}-{io}{k + 1 if k < n_in else k + 1 - n_in}"
+            self.ports[pid] = Port(pid, lane, o, s["id"], "STOCKER", "STOCKER", x, z, bx, z, io)
             area.ports.append(pid)
         area.loop_edges = edges
         area.park_edge = lane

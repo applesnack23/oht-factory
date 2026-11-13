@@ -1,8 +1,12 @@
 """Stocker interior: shelves + one stacker crane per stocker (visual model).
 
-In/out ports: the OHT puts a FOUP on the stage under the rail; the port conveyor carries it into
-the stocker (inner position, at the near rack's bottom level). The crane takes it from there.
-Outbound FOUPs are put on the inner position by the crane and conveyed out to the stage.
+Ports are either inputs (IN: OHTs drop FOUPs) or outputs (OUT: OHTs pick FOUPs up). Each port
+conveyor has two positions, the stage under the rail and the inner end (at the near rack's bottom
+level), and each position holds one FOUP:
+  IN : stage_in --(conveyor, when the inner end is free)--> in --> inner_in --(crane takes)
+  OUT: (crane gives, only onto a free inner end) inner_out --(when the stage is free)--> out --> stage
+An OHT lowers onto an IN stage only when it is free, and lifts from an OUT stage only when its FOUP
+is there; otherwise it waits with its gripper up (fab metric portWaitTime).
 
 Crane: travels along the aisle (z), lifts (y = fork top), turns its fork 180 degrees on a
 turntable to serve the near or the far rack, and extends a narrow fork (u). Shelves and conveyors
@@ -33,9 +37,11 @@ CONV_T = 2.5  # port conveyor stage <-> inner position
 
 
 class Stocker:
-    def __init__(self, sid: str, lane_x: float, direction: int, ports: Dict[str, float], seed: int, fill: float = 0.6):
+    def __init__(self, sid: str, lane_x: float, direction: int, ports: Dict[str, float], seed: int, fill: float = 0.6,
+                 io: Optional[Dict[str, str]] = None):
         self.id, self.lane_x, self.dir = sid, lane_x, direction
         self.ports = ports  # port id -> z
+        self.io = io or {p: ("IN" if i % 2 == 0 else "OUT") for i, p in enumerate(ports)}
         z0 = -(N_BAYS - 1) * BAY_PITCH / 2
         self.bay_z = [z0 + i * BAY_PITCH for i in range(N_BAYS)]
         # cells: (rack 0 = near/lane side, 1 = far), bay, level. Near rack level 0 holds the port conveyors.
@@ -43,7 +49,7 @@ class Stocker:
         self.rng = np.random.default_rng(seed)
         self.occ = (self.rng.random(len(self.cells)) < fill).astype(np.int8)
         self.tasks: deque = deque()
-        self.conv: List[list] = []  # [port, kind 'in'|'inner'|'out', t0, t1, job]
+        self.conv: List[list] = []  # [port, kind, t0, t1, job]; kinds see module docstring
         self.ready: set = set()  # job ids whose FOUP is on the stage
         self.cancelled: set = set()
         self.z, self.y, self.fork = 0.0, LEVELS[1], AISLE_U
@@ -64,12 +70,19 @@ class Stocker:
         return {"id": self.id, "laneX": self.lane_x, "dir": self.dir, "wallU": WALL_U, "nearU": NEAR_U, "aisleU": AISLE_U,
                 "farU": FAR_U, "backU": BACK_U, "levels": LEVELS, "bayZ": self.bay_z, "bayPitch": BAY_PITCH,
                 "cells": [list(self.cell_pos(i)) for i in range(len(self.cells))], "convT": CONV_T,
-                "ports": [{"id": p, "z": z} for p, z in self.ports.items()]}
+                "ports": [{"id": p, "z": z, "io": self.io[p]} for p, z in self.ports.items()]}
 
     # ------------------------------------------------------------ requests
+    def _at(self, port: str, *kinds) -> bool:
+        return any(c[0] == port and c[1] in kinds for c in self.conv)
+
+    def can_drop(self, port: str) -> bool:
+        """An OHT may lower a FOUP onto this IN port's stage."""
+        return not self._at(port, "stage_in")
+
     def store(self, port: str) -> None:
-        """An OHT has put a FOUP on the stage: convey it in, then the crane stores it."""
-        self.conv.append([port, "in", self.t, self.t + CONV_T, None])
+        """An OHT has put a FOUP on the IN stage: it is conveyed in when the inner end is free."""
+        self.conv.append([port, "stage_in", self.t, self.t, None])
 
     def retrieve(self, job_id: str, port: str) -> None:
         """Retrievals go before queued stores: an OHT may be waiting for this FOUP."""
@@ -122,24 +135,41 @@ class Stocker:
             self.legs = self._pick_legs(*self.cell_pos(c)) + self._place_legs(*inner)
         task["cell"] = c
 
-    def update(self, dt: float) -> None:
-        self.t += dt
-        for c in self.conv:  # port conveyors
+    def _conveyors(self) -> None:
+        for c in self.conv:
             if c[1] == "in" and self.t >= c[3]:
-                c[1], c[2] = "inner", c[3]
+                c[1], c[2] = "inner_in", c[3]
                 self.tasks.append({"kind": "STORE", "port": c[0], "conv": c})
             elif c[1] == "out" and self.t >= c[3]:
-                c[1] = "stage"
+                c[1], c[2] = "stage", c[3]
                 self.ready.add(c[4])
+        for c in self.conv:  # start a move when the next position is free
+            if c[1] == "stage_in" and not self._at(c[0], "in", "inner_in"):
+                c[1], c[2], c[3] = "in", self.t, self.t + CONV_T
+            elif c[1] == "inner_out" and not self._at(c[0], "out", "stage"):
+                c[1], c[2], c[3] = "out", self.t, self.t + CONV_T
+
+    def _next_task(self) -> Optional[dict]:
+        """First executable task: a retrieval needs a free inner end on its OUT port."""
+        for t in self.tasks:
+            if t["kind"] == "STORE" or not self._at(t["port"], "inner_out"):
+                self.tasks.remove(t)
+                return t
+        return None
+
+    def update(self, dt: float) -> None:
+        self.t += dt
+        self._conveyors()
         budget = dt
         while budget > 1e-9:
             if not self.legs:
                 if self.task is not None:
                     self.done += 1
                     self.task = None
-                if not self.tasks:
+                    self._conveyors()
+                self.task = self._next_task()
+                if self.task is None:
                     return
-                self.task = self.tasks.popleft()
                 self._plan(self.task)
             leg = self.legs[0]
             kind = leg[0]
@@ -199,7 +229,8 @@ class Stocker:
             elif t["job"] in self.cancelled:
                 self.cancelled.discard(t["job"])
             else:
-                self.conv.append([t["port"], "out", self.t, self.t + CONV_T, t["job"]])
+                self.conv.append([t["port"], "inner_out", self.t, self.t, t["job"]])
+                self._conveyors()
 
     def state(self) -> dict:
         return {"id": self.id, "z": round(self.z, 3), "y": round(self.y, 3), "fork": round(float(self.fork), 3),
@@ -214,5 +245,6 @@ def build_stockers(layout, seed: int) -> Dict[str, Stocker]:
         ps = [layout.ports[p] for p in a.ports]
         lane_x = ps[0].x
         direction = 1 if a.cx > lane_x else -1
-        out[a.id] = Stocker(a.id, lane_x, direction, {p.id: p.z for p in ps}, seed * 7919 + 101 + k)
+        out[a.id] = Stocker(a.id, lane_x, direction, {p.id: p.z for p in ps}, seed * 7919 + 101 + k,
+                            io={p.id: p.io for p in ps})
     return out

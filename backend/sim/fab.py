@@ -110,7 +110,7 @@ class FabSimulation:
         self.metrics = {"delivered": 0, "deliveryTimes": [], "waitTimes": [], "emptyMeters": 0.0, "loadedMeters": 0.0,
                         "busyTime": 0.0, "blockedTime": 0.0, "hotDelivered": 0, "hotOnTime": 0, "hotLate": 0,
                         "created": 0, "deadlock": False, "decisions": {DISPATCH: 0, ROUTE: 0, REPOSITION: 0},
-                        "defers": 0, "mergeWaitTime": 0.0, "preassigned": 0, "portWaitTime": 0.0}
+                        "defers": 0, "mergeWaitTime": 0.0, "preassigned": 0, "portWaitTime": 0.0, "rebinds": 0}
         self.last_progress_t = 0.0
         self.last_decision_t = -1e9
         self.recent_jobs: deque = deque()  # (t, src_area) for demand-rate features
@@ -226,7 +226,9 @@ class FabSimulation:
         new_pos = []
         for veh in self.vehicles:
             if veh.state in (LOADING, UNLOADING):
-                if veh.state != LOADING or self._foup_ready(veh):
+                if veh.state == LOADING and not self._foup_ready(veh):
+                    self._rebind_at_out_port(veh)
+                if self._foup_ready(veh) if veh.state == LOADING else self._drop_ok(veh):
                     veh.timer -= dt
                 else:
                     self.metrics["portWaitTime"] += dt  # OHT waits at the port for the stocker crane or tool
@@ -440,6 +442,41 @@ class FabSimulation:
         j = self.jobs.get(veh.job)
         sk = self.stockers.get(j.src_area) if j else None
         return sk is None or j.id in sk.ready
+
+    def _rebind_at_out_port(self, veh: Vehicle) -> None:
+        """An OHT at a stocker OUT port takes the FOUP that is on the stage. If that FOUP belongs to
+        another job from the same port, the two jobs swap vehicles (MCS re-binding), so an OHT never
+        waits for 'its' FOUP while another one sits on the stage and blocks the conveyor."""
+        a = self.jobs.get(veh.job)
+        sk = self.stockers.get(a.src_area) if a else None
+        if sk is None or veh.timer < self.hoist:
+            return
+        b = next((self.jobs[c[4]] for c in sk.conv if c[0] == a.src and c[1] == "stage" and c[4] in self.jobs), None)
+        if b is None or b.id == a.id or b.state not in ("PENDING", "ASSIGNED"):
+            return
+        w = self.vehicles[b.vehicle] if b.vehicle is not None else None
+        # veh takes b; a goes to whoever had b (or back to the dispatcher)
+        b.state, b.vehicle, b.assigned_t = "LOADING", veh.id, b.assigned_t if b.assigned_t is not None else self.time
+        veh.job = b.id
+        if w is None:
+            a.state, a.vehicle = "PENDING", None
+            a.defer_until = 0.0
+        else:
+            a.state, a.vehicle = "ASSIGNED", w.id
+            if w.job == b.id:
+                w.job = a.id
+            elif w.next_job == b.id:
+                w.next_job = a.id
+        self.metrics["rebinds"] += 1
+        self.events.emit("REBIND", self.time, vehicle=veh.id, took=b.id, gave=a.id, to=(w.id if w else None))
+
+    def _drop_ok(self, veh: Vehicle) -> bool:
+        """Lower onto a stocker IN stage only when it is free (checked before the hoist starts)."""
+        if veh.timer < self.hoist:
+            return True
+        j = self.jobs.get(veh.job)
+        sk = self.stockers.get(j.dst_area) if j else None
+        return sk is None or sk.can_drop(j.dst)
 
     def _finish_hoist(self, veh: Vehicle, t: float) -> None:
         j = self.jobs.get(veh.job)
@@ -796,6 +833,7 @@ class FabSimulation:
             "idle": sum(1 for v in self.vehicles if v.state == IDLE),
             "preassigned": m["preassigned"],
             "portWaitTime": round(m["portWaitTime"], 1),
+            "rebinds": m["rebinds"],
             "toolUtilization": round(self.flow.utilization(self.time), 4),
             "lotsProcessed": self.flow.processed,
             "stockerLots": self.flow.stock_count(),

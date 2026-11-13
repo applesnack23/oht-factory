@@ -1,13 +1,32 @@
 # PROGRESS — AI OHT Fab
 
 ## Status
-All phases in PLAN.md are done. Tests: `pytest backend/tests` 41 passed, `npm test` (frontend) 4 passed.
+All phases in PLAN.md are done. Tests: `pytest backend/tests` 43 passed, `npm test` (frontend) 4 passed.
 Real-WebGL rendering was only checked headlessly with a stubbed Three.js in the cloud workspace (no JS errors, panels fill in, mode switch works). Check it on the Mac after `npm install`.
 
 ## Simulation sanity (rule_basic, normal, 30 min)
 About 906 moves/h, average delivery 167 s, p95 267 s, fleet utilization about 68%. No deadlocks or gap violations in any scenario.
 
-## v3.2 — FOUP handle, OHT gripper, stocker conveyors and turntable crane (current)
+## v3.3 — stocker IN/OUT ports (current)
+- FOUPs used to overlap on stocker ports: a port both received and sent FOUPs, and its conveyor had no capacity limit.
+- Each stocker now has 2 input ports (IN, green belts) and 2 output ports (OUT, blue belts), with IN upstream on the lane. Deliveries to a stocker go to the IN port with the fewest outstanding jobs, retrievals leave from the least-loaded OUT port.
+- Each port position (stage, inner end) holds one FOUP. An OHT lowers onto an IN stage only when it is free (otherwise it waits with its gripper up). The crane only puts a FOUP onto an OUT port whose inner end is free, and FOUPs move to the stage when it is free.
+- Making the capacity real exposed a deadlock: with several retrievals on one OUT port, the OHT that arrived first waited for "its" FOUP, which was behind another job's FOUP on the stage, whose OHT was queued behind it on the rail. Fix, as an MCS does it: an OHT at an OUT port takes the FOUP on the stage, and **the two jobs swap vehicles (re-binding)**. Metric `rebinds`.
+- Tests: one FOUP per port position, OUT-port back-pressure, IN/OUT roles respected, no deadlock under high_load. Backend 43 passed.
+- Re-evaluated (7 scenarios × 5 seeds). All policies improved over v3.2 because FOUPs no longer pile up on the ports: moves/h +3%, delivery −5%.
+
+| policy | mean reward | moves/h | avg delivery s | tool util | lots processed / 30 min |
+|---|---|---|---|---|---|
+| rule_preassign | **3077** | 984 | 136.1 | 57.7% | 389.7 |
+| ppo(oht_ppo3_a) | 3054 | 983 | 137.2 | 57.6% | 390.7 |
+| ppo(oht_bc3) | 3023 | 977 | 137.4 | 57.6% | 389.9 |
+| ppo(oht_ppo3_b) | 3018 | 977 | 137.9 | 57.5% | 389.7 |
+| rule_basic | 2681 | 937 | 150.3 | 54.7% | 370.1 |
+| rule_smart | 2542 | 915 | 156.6 | 53.9% | 364.2 |
+
+  The AI models beat rule_smart (+476 to +512, 26–32/35 wins) and remain just below rule_preassign. oht_ppo3_a is closest (−24 ± 18, 16/35 wins), so it is now the recommended AI model. No deadlocks in 210 episodes.
+
+## v3.2 — FOUP handle, OHT gripper, stocker conveyors and turntable crane
 - FOUP model: shell, side handles and the top flange (robotic handle). OHT gripper: a plate on 4 belts with two fingers whose feet close under the flange at the port (and open after a drop).
 - Stocker in/out ports: the OHT sets the FOUP on the stage under the rail. A port conveyor (2.5 s) carries it to the inner end, where the crane takes it; outbound runs the other way. Retrieved FOUPs are ready for the OHT only once they are on the stage.
 - Stocker shelves and conveyors hold a FOUP on two pads with a groove between them. The crane's single narrow fork enters the groove below the FOUP, lifts slowly until it carries it, and retracts. To put a FOUP down it enters above and lowers until the FOUP rests on the pads.

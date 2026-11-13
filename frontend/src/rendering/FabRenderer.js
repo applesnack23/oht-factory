@@ -297,13 +297,19 @@ export class FabRenderer {
         add(frameMat, 0.05, 0.05, rackLen, X(backU), y - 0.045, 0);
       });
     }
-    // in/out ports: stage under the OHT rail + conveyor (two belts with a groove) into the stocker
-    const beltMat = new THREE.MeshStandardMaterial({ color: 0x2f6f55, roughness: 0.6 });
+    // in/out ports: stage under the OHT rail + conveyor (two belts with a groove) into the stocker.
+    // Input ports (OHT drops) have green belts, output ports (OHT picks up) blue belts, plus a sign.
+    const beltIn = new THREE.MeshStandardMaterial({ color: 0x2f7a55, roughness: 0.6 });
+    const beltOut = new THREE.MeshStandardMaterial({ color: 0x2f5f9a, roughness: 0.6 });
     const convFrame = new THREE.MeshStandardMaterial({ color: 0x4a535c, roughness: 0.5 });
     const u0 = -0.38, u1 = sk.nearU + 0.42, cl = u1 - u0, cm = (u0 + u1) / 2;
     for (const p of sk.ports) {
+      const isIn = p.io !== 'OUT';
+      const sign = label(isIn ? 'IN' : 'OUT', { size: 0.2, bg: isIn ? 'rgba(40,140,90,.92)' : 'rgba(40,100,180,.92)' });
+      sign.position.set(X(u0 - 0.03), PORT_TOP + 0.42, p.z);
+      g.add(sign);
       for (const dz of [-0.2, 0.2]) {
-        add(beltMat, cl, 0.04, 0.15, X(cm), PORT_TOP - 0.02, p.z + dz);
+        add(isIn ? beltIn : beltOut, cl, 0.04, 0.15, X(cm), PORT_TOP - 0.02, p.z + dz);
         add(convFrame, cl, 0.08, 0.04, X(cm), PORT_TOP - 0.06, p.z + dz + Math.sign(dz) * 0.1);
       }
       for (const u of [u0 + 0.1, u1 - 0.1]) add(convFrame, 0.08, PORT_TOP - 0.1, 0.5, X(u), (PORT_TOP - 0.1) / 2, p.z, true);
@@ -535,7 +541,8 @@ export class FabRenderer {
       view.tine.position.set(ext + 0.25 - len / 2, -0.0175, 0);
       view.cFoup.visible = !!b.carry;
       view.cFoup.position.set(ext, FOUP_H / 2, 0);
-      // conveyors: 'in' stage -> inner, 'inner' waiting for the crane, 'out' inner -> stage, 'stage' ready for an OHT
+      // conveyors: IN  stage_in -> in (moving) -> inner_in (crane takes it)
+      //            OUT inner_out (put by the crane) -> out (moving) -> stage (ready for an OHT)
       let n = 0;
       d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
       for (const [pid, kind, t0, t1] of b.conv || []) {
@@ -543,7 +550,8 @@ export class FabRenderer {
         if (!p || n >= 32) continue;
         const f = Math.min(1, Math.max(0, (sim - t0) / Math.max(1e-6, t1 - t0)));
         const e = f * f * (3 - 2 * f);
-        const u = kind === 'in' ? sk.nearU * e : kind === 'out' ? sk.nearU * (1 - e) : kind === 'inner' ? sk.nearU : 0;
+        const u = kind === 'in' ? sk.nearU * e : kind === 'out' ? sk.nearU * (1 - e)
+          : (kind === 'inner_in' || kind === 'inner_out' || kind === 'inner') ? sk.nearU : 0;
         d.position.set(X(u), PORT_TOP + FOUP_H / 2, p.z); d.updateMatrix();
         view.conv.setMatrixAt(n++, d.matrix);
       }

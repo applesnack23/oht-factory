@@ -126,6 +126,7 @@ class LotFlow:
         self.stock: Dict[str, List[Tuple[Lot, str]]] = {}  # next process -> [(lot, stocker area)]
         self.new_jobs: List[Job] = []
         self.processed = 0
+        self.port_load: Dict[str, int] = {}  # stocker port -> outstanding jobs using it
         rng = np.random.default_rng([self.seed, 999_983])
         occ = float(self.cfg.get("initialOccupancy", 0.85))
         hot_p = float(self.cfg["hotLotProbability"])
@@ -163,6 +164,9 @@ class LotFlow:
         j = Job(f"J{self.seq:05d}", src, dst, t, lot.hot, t + self.cfg["hotLotDeadline"] if lot.hot else math.inf,
                 src_area, dst_area)
         j.lot = lot
+        for p in (src, dst):
+            if p not in self.lps:
+                self.port_load[p] = self.port_load.get(p, 0) + 1
         self.new_jobs.append(j)
         return j
 
@@ -180,8 +184,12 @@ class LotFlow:
             lp.state, lp.job = RESERVED, j.id
             return j
         sk = self.stockers[min(int(u[4] * len(self.stockers)), len(self.stockers) - 1)]
-        ports = self.layout.areas[sk].ports
-        return self._job(src, ports[min(int(u[5] * len(ports)), len(ports) - 1)], src_area, sk, lot, t)
+        return self._job(src, self._stocker_port(sk, "IN"), src_area, sk, lot, t)
+
+    def _stocker_port(self, sk: str, io: str) -> str:
+        """The input (or output) port of stocker sk with the fewest outstanding jobs."""
+        ports = [p for p in self.layout.areas[sk].ports if self.layout.ports[p].io == io]
+        return min(ports, key=lambda p: (self.port_load.get(p, 0), ports.index(p)))
 
     def _fill(self, t: float) -> None:
         """Send waiting stocker lots to free load ports of their next process (hot lots first)."""
@@ -194,8 +202,7 @@ class LotFlow:
                 lot, sk = q.pop(0)
                 u = self._u(lot)
                 dst = free.pop(min(int(u[3] * len(free)), len(free) - 1))
-                ports = self.layout.areas[sk].ports
-                src = ports[min(int(u[5] * len(ports)), len(ports) - 1)]
+                src = self._stocker_port(sk, "OUT")
                 lp = self.lps[dst]
                 j = self._job(src, dst, sk, lp.area, lot, t)
                 lp.state, lp.job = RESERVED, j.id
@@ -203,6 +210,8 @@ class LotFlow:
     # ------------------------------------------------------------ events from the transport system
     def delivered(self, job: Job, t: float) -> None:
         lot = job.lot
+        if job.dst in self.port_load:
+            self.port_load[job.dst] -= 1
         if job.dst in self.lps:
             lp = self.lps[job.dst]
             lp.state, lp.lot, lp.job, lp.t0, lp.t1 = REST, lot, None, t, t + self.rest_t
@@ -211,6 +220,8 @@ class LotFlow:
             self._fill(t)
 
     def picked(self, job: Job, t: float) -> None:
+        if job.src in self.port_load:
+            self.port_load[job.src] -= 1
         lp = self.lps.get(job.src)
         if lp is not None and lp.job == job.id:
             lp.state, lp.lot, lp.job = EMPTY, None, None

@@ -4,7 +4,7 @@ Semiconductor fab AMHS (OHT) digital twin + RL dispatcher. Sister project of `..
 
 ## Layout
 - `config/` fab.json (geometry, speeds, fleet), demand.json, reward.json, scenarios.json — all tunables live here.
-- `backend/sim/` pure-python simulation: `track.py` rail graph + Floyd routing, `layout.py` fab generator (ring, 2 shortcuts, 8 intrabay loops, 2 stockers, 120 ports), `fab.py` vehicles/jobs/decisions, `lotflow.py` closed-loop lots (64 tools with EFEM load ports, one FOUP per LP, deliveries only to reserved free LPs, stocker queues), `stocker.py` crane, `demand.py` Job record.
+- `backend/sim/` pure-python simulation: `track.py` rail graph + Floyd routing, `layout.py` fab generator (ring, 2 shortcuts, 8 intrabay loops, 2 stockers with 2 IN + 2 OUT ports, 120 ports), `fab.py` vehicles/jobs/decisions, `lotflow.py` closed-loop lots (64 tools with EFEM load ports, one FOUP per LP, deliveries only to reserved free LPs, stocker queues), `stocker.py` crane, `demand.py` Job record.
 - `backend/ai/` `oht_env.py` (Gymnasium env, one step = one decision), `train_ppo.py` (SB3 or NumpyPPO fallback), `pretrain_bc.py` (BC + DAgger from PreassignRulePolicy by default), `evaluate.py`, `inference.py`.
 - `backend/policies/rules.py` rule baselines (basic NVF, smart, preassign, random) — they read the observation only.
 - `backend/api/` FabService + routes; `backend/main.py` FastAPI (port 8001); `backend/api/devserver.py` stdlib fallback server.
