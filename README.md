@@ -61,6 +61,23 @@ npm run dev                     # http://localhost:5174
 ```
 브라우저에서 **http://localhost:5174** 를 엽니다. 컨베이어 프로젝트(8000/5173)와 동시에 실행해도 충돌하지 않습니다.
 
+### Windows에서 실행
+Python 3.10 이상, Node.js 22 이상을 설치한 뒤 PowerShell에서 실행합니다. 다른 점은 가상환경을 만들고 켜는 명령뿐입니다.
+
+```powershell
+cd ai-oht-fab
+py -m venv .venv
+.venv\Scripts\Activate.ps1        # cmd 창이면 .venv\Scripts\activate.bat
+pip install -r requirements.txt
+python -m backend.main            # 터미널 1
+```
+```powershell
+cd ai-oht-fab\frontend
+npm install
+npm run dev                       # 터미널 2, 브라우저에서 http://localhost:5174
+```
+PowerShell이 스크립트 실행을 막으면 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`를 한 번 실행하세요. `pip install`의 torch는 CPU 버전이 설치되며, 이 프로젝트 학습에는 충분합니다.
+
 ### 4) 화면 사용법
 - 위쪽 **Start / Pause / Reset** 은 시뮬레이션 재생 버튼입니다. Speed는 x1–x50, Scenario로 7개 상황을 고릅니다.
 - **Control**:

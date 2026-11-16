@@ -53,7 +53,7 @@ def test_service_controls_and_watch(tmp_path):
     run = "pytest_watch"
     d = MODELS_DIR / run
     model.save(d / "latest_model")
-    (d / "latest_model.json").write_text(json.dumps({"step": 5000, "totalSteps": 9000, "snapshot": 2}))
+    (d / "latest_model.json").write_text(json.dumps({"step": 5000, "totalSteps": 9000, "snapshot": 2}), encoding="utf-8")
     try:
         w = svc.start_watch(run)
         assert not w["waiting"] and w["step"] == 5000 and svc.mode == "ppo" and svc.fab.time == 0.0

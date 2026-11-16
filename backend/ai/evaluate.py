@@ -72,7 +72,7 @@ def evaluate(policies, scenarios, n_seeds, name=None, quiet=False):
             lines.append(f"| {r['policy']} | {f('reward')} | {f('throughputPerHour', 0)} | {f('avgDeliveryTime')} | {f('p95DeliveryTime')} | "
                          f"{f('avgWaitForVehicle')} | {f('emptyTravelRatio', 3)} |")
         lines.append("")
-    (out / "report.md").write_text("\n".join(lines))
+    (out / "report.md").write_text("\n".join(lines), encoding="utf-8")
     return df, summ, out
 
 

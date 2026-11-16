@@ -121,7 +121,7 @@ def main(argv=None):
     meta = {"run": a.run, "level": a.level, "algo": "bc_numpy", "timesteps": 0, "best_eval": res["mean_reward"],
             "samples": int(len(X)), "best_metrics": {k: v for k, v in res.items() if k != "episodes"},
             "teacher": a.teacher, "teacher_eval": {k: v for k, v in rule.items() if k != "episodes"}}
-    (out / "run_meta.json").write_text(json.dumps(meta, indent=2, default=float))
+    (out / "run_meta.json").write_text(json.dumps(meta, indent=2, default=float), encoding="utf-8")
     log(f"BC {a.run}: eval {res['mean_reward']:.1f} (teacher {rule['mean_reward']:.1f}) avgDel {res['avgDeliveryTime']:.1f}s "
         f"(teacher {rule['avgDeliveryTime']:.1f}s) thr/h {res['throughputPerHour']:.0f} (teacher {rule['throughputPerHour']:.0f})")
     return meta

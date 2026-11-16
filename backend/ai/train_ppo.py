@@ -39,8 +39,14 @@ SHARED_STATUS = LOGS_DIR / "training_status.json"
 def write_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(obj, indent=2, default=float))
-    os.replace(tmp, path)
+    tmp.write_text(json.dumps(obj, indent=2, default=float), encoding="utf-8")
+    for i in range(20):  # Windows: replace fails while another process has the file open
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.05)
+    tmp.unlink(missing_ok=True)  # give up on this update; the next one will land
 
 
 class TB:
@@ -149,7 +155,7 @@ class Trainer:
         self.history.append(row)
         new = not self.csv_path.exists()
         keys = list(row.keys())
-        with open(self.csv_path, "a", newline="") as f:
+        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
             if new:
                 w.writeheader()
@@ -166,7 +172,7 @@ class Trainer:
         self.log(msg)
         self.tb.scalars({"eval/mean_reward": res["mean_reward"], "eval/avg_delivery_time": res["avgDeliveryTime"],
                          "eval/throughput": res["throughputPerHour"]}, step)
-        with open(self.log_dir / "evaluations.csv", "a") as f:
+        with open(self.log_dir / "evaluations.csv", "a", encoding="utf-8") as f:
             f.write(f"{step},{res['mean_reward']},{res['std_reward']},{res['avgDeliveryTime']},{res['throughputPerHour']},{res['p95DeliveryTime']},{res['avgWaitForVehicle']}\n")
         self.last_eval = {"step": int(step), "reward": res["mean_reward"], "avgDeliveryTime": res["avgDeliveryTime"],
                           "throughputPerHour": res["throughputPerHour"]}
@@ -387,7 +393,7 @@ class Trainer:
             ax.grid(alpha=0.3)
         ev = self.log_dir / "evaluations.csv"
         if ev.exists():
-            rows = [list(map(float, l.split(","))) for l in ev.read_text().strip().splitlines()]
+            rows = [list(map(float, l.split(","))) for l in ev.read_text(encoding="utf-8").strip().splitlines()]
             axs[0, 0].plot([r[0] for r in rows], [r[1] for r in rows], "o-", label="eval (deterministic)")
             axs[0, 0].legend()
         fig.suptitle(f"{self.run_name} ({self.level}, {self.algo})")
@@ -428,7 +434,7 @@ def parse_args(argv=None):
     p.add_argument("--smoke", action="store_true", help="tiny run to verify the pipeline")
     a = p.parse_args(argv)
     if a.config:
-        for k, v in json.loads(Path(a.config).read_text()).items():
+        for k, v in json.loads(Path(a.config).read_text(encoding="utf-8")).items():
             setattr(a, k.replace("-", "_"), v)
     if a.smoke:
         a.timesteps, a.n_steps, a.n_envs, a.eval_freq, a.eval_episodes, a.save_freq = 1024, 128, 2, 512, 1, 512

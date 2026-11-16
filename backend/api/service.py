@@ -259,7 +259,7 @@ class FabService:
         st = {}
         if STATUS_FILE.exists():
             try:
-                st = json.loads(STATUS_FILE.read_text())
+                st = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
             except Exception:
                 st = {}
         alive = self.train_proc is not None and self.train_proc.poll() is None
@@ -284,12 +284,12 @@ class FabService:
                 cmd += ["--hidden", *[str(h) for h in m.cfg["hidden"]]]
         cmd += list(extra_args or [])
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        log = open(LOGS_DIR / f"{run}.out", "w")
+        log = open(LOGS_DIR / f"{run}.out", "w", encoding="utf-8")
         self.train_proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=log, stderr=subprocess.STDOUT,
-                                           env={**os.environ, "PYTHONUNBUFFERED": "1"})
+                                           env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
         self.train_run = run
         STATUS_FILE.write_text(json.dumps({"run": run, "level": scenario, "state": "starting", "totalSteps": timesteps,
-                                           "step": 0, "progress": 0.0, "log": []}))
+                                           "step": 0, "progress": 0.0, "log": []}), encoding="utf-8")
         return {"run": run, "pid": self.train_proc.pid}
 
     def stop_training(self, timeout: float = 15.0) -> dict:
@@ -297,7 +297,7 @@ class FabService:
             return {"stopped": False, "reason": "not running"}
         stop = LOGS_DIR / self.train_run / "STOP"
         stop.parent.mkdir(parents=True, exist_ok=True)
-        stop.write_text("stop")
+        stop.write_text("stop", encoding="utf-8")
         proc = self.train_proc
         threading.Timer(timeout, lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM)).start()
         return {"stopping": True, "run": self.train_run}
@@ -312,7 +312,7 @@ class FabService:
         if not run:
             run = self.train_run
             if not run and STATUS_FILE.exists():
-                run = json.loads(STATUS_FILE.read_text()).get("run")
+                run = json.loads(STATUS_FILE.read_text(encoding="utf-8")).get("run")
         if not run:
             raise ValueError("no training run to watch")
         self.watch = {"run": run, "dir": str(MODELS_DIR / run), "mtime": None, "reloads": 0, "step": None,
@@ -340,7 +340,7 @@ class FabService:
         meta = {}
         if (d / "latest_model.json").exists():
             try:
-                meta = json.loads((d / "latest_model.json").read_text())
+                meta = json.loads((d / "latest_model.json").read_text(encoding="utf-8"))
             except Exception:
                 meta = {}
         self.ppo_policy = PPOPolicy(f)

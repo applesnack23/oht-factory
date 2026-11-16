@@ -76,7 +76,7 @@ def list_models():
         meta = {}
         if "run_meta.json" in files:
             try:
-                meta = json.loads((d / "run_meta.json").read_text())
+                meta = json.loads((d / "run_meta.json").read_text(encoding="utf-8"))
             except Exception:
                 meta = {}
         out.append({"name": f"{d.name}/{main}", "run": d.name, "kind": main.split(".")[-1], "scenario": meta.get("level"),
