@@ -78,6 +78,16 @@ npm run dev                       # 터미널 2, 브라우저에서 http://local
 ```
 PowerShell이 스크립트 실행을 막으면 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`를 한 번 실행하세요. `pip install`의 torch는 CPU 버전이 설치되며, 이 프로젝트 학습에는 충분합니다.
 
+## 오프라인 뷰어 (서버 없이 HTML 하나로 보기)
+`offline/viewer.html`을 더블클릭하면 브라우저에서 바로 열립니다. 백엔드, npm, 인터넷이 필요 없고 USB나 메일로 그대로 옮겨도 됩니다.
+녹화된 실행(rule_preassign, normal 시나리오, 15분)을 반복 재생하며, Start / Pause / Speed / Reset은 재생을 조절합니다. 학습, 모델 불러오기, 제어 방식 변경은 서버가 있어야 합니다.
+
+다시 만들기 (`frontend/node_modules`가 있어야 합니다. 처음이면 `cd frontend && npm install`):
+```bash
+python -m backend.tools.export_replay --mode rule_preassign --minutes 15   # → offline/replay.json.gz
+python -m backend.tools.build_offline --title "AI OHT Fab (offline)"   # → offline/viewer.html
+```
+
 ### 4) 화면 사용법
 - 위쪽 **Start / Pause / Reset** 은 시뮬레이션 재생 버튼입니다. Speed는 x1–x50, Scenario로 7개 상황을 고릅니다.
 - **Control**:

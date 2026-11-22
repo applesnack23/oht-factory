@@ -38,7 +38,7 @@ class App {
       + '<span><i style="background:#8c6fd1"></i>shortcut (red = closed)</span><span><i style="background:#d94bd9"></i>route decision point</span>';
     vp.appendChild(legend);
     this.chips = document.getElementById('overlay');
-    this.client.on('status', (s) => { this.top.setConnection(s); if (s === 'open') this.top.refresh(); });
+    this.client.on('status', (s) => { this.top.setConnection(s); if (s === 'open' || s === 'replay') this.top.refresh(); });
     this.client.on('layout', (l) => this.renderer.buildLayout(l));
     this.client.on('state', (s) => this.onState(s));
     this.client.connect();
